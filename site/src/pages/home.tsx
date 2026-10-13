@@ -386,7 +386,7 @@ const VS_TICKS = [0.55, 0.6, 0.65, 0.7, 0.75, 0.8]
 const vsPos = (a: number) => `${(((Math.min(Math.max(a, VS_MIN), VS_MAX) - VS_MIN) / (VS_MAX - VS_MIN)) * 100).toFixed(2)}%`
 
 const vsFeatures: { label: string; ollaya: string; ollama: string }[] = [
-  { label: 'Decision models', ollaya: '19 families: encoders (laya, nli, gliclass, von, decima) and decoders (winnow, clef, kev, decider, nimble, jeb, jeeves, cygnet, snap, arbiter and more)', ollama: 'Nimble and Tev1, decoders only' },
+  { label: 'Decision models', ollaya: '21 families: encoders (laya, nli, gliclass, von, decima) and decoders (winnow, clef, kev, decider, nimble, jeb, jeeves, cygnet, snap, arbiter and more)', ollama: 'Nimble and Tev1, decoders only' },
   { label: 'Small encoders (milliseconds, CPU-friendly)', ollaya: 'laya, nli, gliclass, von, decima', ollama: 'None' },
   { label: 'Probabilities', ollaya: "Calibrated with each author's fitted temperature, refittable in a Modelfile", ollama: 'Raw softmax; documented as uncalibrated' },
   { label: 'Options per question', ollaya: 'Up to 255, as TypeSafe', ollama: 'Up to 26' },
