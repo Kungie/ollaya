@@ -435,7 +435,7 @@ The API behind `ollaya create -f Modelfile`: the CLI reads the Modelfile and the
 | `from` | string | yes | A local model, possibly a router. It is never pulled. |
 | `questions` | object | no | Built-in questions, validated like a decision request |
 | `calibration` | object | no | `temperature`: up to 3 numbers (choice, score, noul). `temperature_by_options`: `"<type>:<2\|3-5\|6-10\|11+>"` → number. |
-| `parameters` | object | no | `precision`: `"fp16"` or `"fp32"`, to pin one graph |
+| `parameters` | object | no | `precision`: `"fp16"` or `"fp32"`, to pin one graph that `from` carries |
 | `license` | string or array | no | License text(s) |
 | `description` | string | no | One line, shown by `/v1/models` and `ollaya show` |
 | `stream` | boolean | no | Default `true` |

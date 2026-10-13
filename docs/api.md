@@ -1029,7 +1029,7 @@ it names, and sends their contents as JSON.
 | `from` | string | yes | – | Local base model, possibly a router. It must exist (`404`); it is never pulled. |
 | `questions` | object | no | inherited | Validated as in [§5.2](#52-question-schema) (1–256 questions); becomes the embedded schema |
 | `calibration` | object | no | inherited | `temperature`: array of up to 3 numbers (choice, score, noul). `temperature_by_options`: object of `"<type>:<2\|3-5\|6-10\|11+>"` → number. |
-| `parameters` | object | no | inherited | Closed set: `precision` (`"fp16"` or `"fp32"`) pins one graph. Other keys are `parameter` issues. |
+| `parameters` | object | no | inherited | Closed set: `precision` (`"fp16"` or `"fp32"`) pins one graph, which `from` must carry (`422` otherwise; most ONNX models carry only fp32). Other keys are `parameter` issues. |
 | `license` | string \| array of string | no | inherited | License text(s); several are joined with a blank line |
 | `description` | string | no | inherited | One line, shown by `/v1/models` and `ollaya show` |
 | `stream` | boolean | no | `true` | As in `/api/pull` |

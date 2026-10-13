@@ -6,7 +6,7 @@ use ollaya_decision::{Calibration, CalibrationFile};
 use ollaya_registry::manifest::{
     ANNOTATION_GRAPH, ANNOTATION_PRECISION, ANNOTATION_QUANTIZATION, media,
 };
-use ollaya_registry::{Entry, ModelConfig, ModelName, Router, Store};
+use ollaya_registry::{Descriptor, Entry, ModelConfig, ModelName, Router, Store};
 use serde_json::Value;
 
 use crate::Error;
@@ -168,13 +168,10 @@ pub fn resolve_entry(store: &Store, entry: Entry) -> Result<Resolved, Error> {
     }
     for g in manifest.layers_of(media::GRAPH_ONNX) {
         let path = store.blob_path(&g.digest)?;
-        if g.annotations.get(ANNOTATION_GRAPH).map(String::as_str) == Some("vision") {
-            files.vision_graph = Some(path);
-            continue;
-        }
-        match g.annotations.get(ANNOTATION_PRECISION).map(String::as_str) {
+        match main_graph_precision(g) {
+            None => files.vision_graph = Some(path),
             Some("fp16") => files.graph_fp16 = Some(path),
-            _ => files.graph_fp32 = Some(path),
+            Some(_) => files.graph_fp32 = Some(path),
         }
     }
     // A precision-pinned tag (`laya:en-fp32`) keeps only the graph it names.
@@ -198,6 +195,22 @@ pub fn resolve_entry(store: &Store, entry: Entry) -> Result<Resolved, Error> {
         questions,
         size: manifest.total_size(),
     })))
+}
+
+/// The precision an ONNX graph layer computes in, `fp16` or `fp32` (also when unannotated), or
+/// `None` for a vision model's image graph, which is never the main graph.
+pub(crate) fn main_graph_precision(graph: &Descriptor) -> Option<&'static str> {
+    if graph.annotations.get(ANNOTATION_GRAPH).map(String::as_str) == Some("vision") {
+        return None;
+    }
+    match graph
+        .annotations
+        .get(ANNOTATION_PRECISION)
+        .map(String::as_str)
+    {
+        Some("fp16") => Some("fp16"),
+        _ => Some("fp32"),
+    }
 }
 
 #[cfg(test)]

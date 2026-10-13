@@ -102,7 +102,7 @@ Probabilities are only useful for thresholds if they are calibrated. Ollaya cali
 
 ### PARAMETER
 
-The only parameter is `precision`. A bare model carries an fp16 and an fp32 graph and picks one when it loads (fp16 on a CUDA GPU, fp32 on the CPU). `PARAMETER precision fp32` pins the fp32 graph everywhere, for example to match an fp32 reference exactly.
+The only parameter is `precision`. A model with an fp16 and an fp32 graph, such as `laya:en`, picks one when it loads (fp16 on a CUDA GPU, fp32 on the CPU). `PARAMETER precision fp32` pins the fp32 graph everywhere, for example to match an fp32 reference exactly. Only a precision the base model carries can be pinned: most ONNX models have just an fp32 graph, and `ollaya show` lists the precisions a model has.
 
 ```dockerfile
 PARAMETER precision fp32

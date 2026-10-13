@@ -11,7 +11,9 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use ollaya_api::{Client, ClientError, DecideRequest, ErrorCode, KeepAlive, PullRequest};
-use ollaya_registry::manifest::{ANNOTATION_PRECISION, Descriptor, MANIFEST_V2, Manifest, media};
+use ollaya_registry::manifest::{
+    ANNOTATION_GRAPH, ANNOTATION_PRECISION, Descriptor, MANIFEST_V2, Manifest, media,
+};
 use ollaya_registry::store::sha256_hex;
 use ollaya_registry::{ModelName, Store};
 use ollaya_server::config::ServerConfig;
@@ -1304,62 +1306,82 @@ async fn show_modelfile_keeps_a_custom_license() {
 }
 
 async fn create_rejects_an_unavailable_precision() {
-    use ollaya_server::service::CreateSpec;
+    // Most of the library is fp32-only. `solo` is such a base; `solo:vision` adds an fp16 image
+    // graph, which is not a main graph and so cannot be pinned.
+    let d = Daemon::start(
+        |dir| {
+            laya_store(dir);
+            let store = Store::open(dir).unwrap();
+            let laya = ModelName::parse("laya:en").unwrap();
+            let mut manifest = store.read_manifest(&laya).unwrap().unwrap().manifest;
+            manifest.layers.retain(|l| {
+                l.annotations.get(ANNOTATION_PRECISION).map(String::as_str) != Some("fp16")
+            });
+            let write = |name: &str, manifest: &Manifest| {
+                let name = ModelName::parse(name).unwrap();
+                let bytes = serde_json::to_vec(manifest).unwrap();
+                store.write_manifest(&name, &bytes).unwrap();
+            };
+            write("solo", &manifest);
+            let mut vision = blob(&store, media::GRAPH_ONNX, b"image graph", Some("fp16"));
+            vision
+                .annotations
+                .insert(ANNOTATION_GRAPH.into(), "vision".into());
+            manifest.layers.push(vision);
+            write("solo:vision", &manifest);
+        },
+        |_| {},
+    )
+    .await;
+    let create = |model: &str, from: &str, precision: &str| {
+        let req = json!({"model": model, "from": from, "parameters": {"precision": precision}});
+        let client = &d.client;
+        async move {
+            client
+                .create(&serde_json::from_value(req).unwrap(), |_| {})
+                .await
+        }
+    };
+    let digest = async |model: &str| {
+        let tags = d.client.tags().await.unwrap();
+        tags.models
+            .into_iter()
+            .find(|m| m.name == model)
+            .map(|m| m.digest)
+    };
 
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(dir.path()).unwrap();
-    add_model(&store, "laya:en", &["en"], json!({}));
-    let base = ModelName::parse("laya:en").unwrap();
-    let mut entry = store.read_manifest(&base).unwrap().unwrap();
-    entry
-        .manifest
-        .layers
-        .retain(|l| l.annotations.get(ANNOTATION_PRECISION).map(String::as_str) != Some("fp16"));
-    store
-        .write_manifest(&base, &serde_json::to_vec(&entry.manifest).unwrap())
-        .unwrap();
-    let models = dir.path().display().to_string();
-    let config =
-        ServerConfig::from_lookup(|k| (k == "OLLAYA_MODELS").then(|| models.clone())).unwrap();
-    let runner = RunnerLaunch {
-        exe: std::env::current_exe().unwrap(),
-        arg0: None,
-        env: vec![],
-        llama_dir: None,
-        cpu_exe: None,
-    };
-    let state = build(config, runner).unwrap();
-    let spec = |precision: &str| CreateSpec {
-        from: "laya:en".into(),
-        precision: Some(precision.into()),
-        ..Default::default()
-    };
-    state
-        .ollaya
-        .create("pinned", spec("fp32"), &|_| {})
-        .await
-        .unwrap();
-    let before = state.ollaya.show("pinned").unwrap().entry.digest;
-    for name in ["missing-precision", "pinned"] {
-        let result = state.ollaya.create(name, spec("fp16"), &|_| {}).await;
-        let shown = state.ollaya.show(name);
-        assert!(
-            matches!(&result, Err(ollaya_server::Error::InvalidRequest(_))),
-            "create returned {result:?}; show returned {shown:?}"
-        );
-        let error = ollaya_server::http::error_body(&result.unwrap_err(), false);
+    // A precision the base carries pins as before, on either kind of base.
+    create("pinned", "solo", "fp32").await.unwrap();
+    create("laya-fp16", "laya:en", "fp16").await.unwrap();
+    assert_eq!(
+        d.client.show("laya-fp16").await.unwrap().parameters,
+        "precision fp16"
+    );
+    let before = digest("pinned:latest").await.unwrap();
+
+    for (model, from) in [
+        ("unpinned", "solo"),
+        ("pinned", "solo"),
+        ("unpinned", "solo:vision"),
+    ] {
+        let (status, body) = api_err(create(model, from, "fp16").await.unwrap_err());
         assert_eq!(
-            (error.status(), error.code),
-            (422, ErrorCode::InvalidRequest)
+            (status, &body.code),
+            (422, &ErrorCode::InvalidRequest),
+            "{model} from {from}"
+        );
+        assert!(
+            body.error.contains("has no fp16 graph"),
+            "{model} from {from}: {}",
+            body.error
         );
     }
-    assert!(
-        store
-            .read_manifest(&ModelName::parse("missing-precision").unwrap())
-            .unwrap()
-            .is_none()
-    );
-    assert_eq!(state.ollaya.show("pinned").unwrap().entry.digest, before);
+    // Nothing was written: no new model, and the existing one is untouched.
+    let (status, _) = api_err(d.client.show("unpinned").await.unwrap_err());
+    assert_eq!(status, 404);
+    assert_eq!(digest("pinned:latest").await.unwrap(), before);
+    d.client.show("pinned").await.unwrap();
+    d.stop().await;
 }
 
 async fn show_modelfile_keeps_a_multi_line_description() {
