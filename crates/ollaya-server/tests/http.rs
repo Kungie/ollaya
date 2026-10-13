@@ -1303,6 +1303,65 @@ async fn show_modelfile_keeps_a_custom_license() {
     d.stop().await;
 }
 
+async fn create_rejects_an_unavailable_precision() {
+    use ollaya_server::service::CreateSpec;
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    add_model(&store, "laya:en", &["en"], json!({}));
+    let base = ModelName::parse("laya:en").unwrap();
+    let mut entry = store.read_manifest(&base).unwrap().unwrap();
+    entry
+        .manifest
+        .layers
+        .retain(|l| l.annotations.get(ANNOTATION_PRECISION).map(String::as_str) != Some("fp16"));
+    store
+        .write_manifest(&base, &serde_json::to_vec(&entry.manifest).unwrap())
+        .unwrap();
+    let models = dir.path().display().to_string();
+    let config =
+        ServerConfig::from_lookup(|k| (k == "OLLAYA_MODELS").then(|| models.clone())).unwrap();
+    let runner = RunnerLaunch {
+        exe: std::env::current_exe().unwrap(),
+        arg0: None,
+        env: vec![],
+        llama_dir: None,
+        cpu_exe: None,
+    };
+    let state = build(config, runner).unwrap();
+    let spec = |precision: &str| CreateSpec {
+        from: "laya:en".into(),
+        precision: Some(precision.into()),
+        ..Default::default()
+    };
+    state
+        .ollaya
+        .create("pinned", spec("fp32"), &|_| {})
+        .await
+        .unwrap();
+    let before = state.ollaya.show("pinned").unwrap().entry.digest;
+    for name in ["missing-precision", "pinned"] {
+        let result = state.ollaya.create(name, spec("fp16"), &|_| {}).await;
+        let shown = state.ollaya.show(name);
+        assert!(
+            matches!(&result, Err(ollaya_server::Error::InvalidRequest(_))),
+            "create returned {result:?}; show returned {shown:?}"
+        );
+        let error = ollaya_server::http::error_body(&result.unwrap_err(), false);
+        assert_eq!(
+            (error.status(), error.code),
+            (422, ErrorCode::InvalidRequest)
+        );
+    }
+    assert!(
+        store
+            .read_manifest(&ModelName::parse("missing-precision").unwrap())
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(state.ollaya.show("pinned").unwrap().entry.digest, before);
+}
+
 async fn show_modelfile_keeps_a_multi_line_description() {
     let d = Daemon::laya().await;
     let description = "Ticket triage\nRoutes billing and technical tickets.";
@@ -1475,6 +1534,7 @@ fn main() {
         pull_streams_ndjson,
         create_copy_delete,
         show_modelfile_keeps_a_custom_license,
+        create_rejects_an_unavailable_precision,
         show_modelfile_keeps_a_multi_line_description,
         gguf_runner_that_dies_on_the_gpu_restarts_on_the_cpu,
         presets_create_show_decide_delete,

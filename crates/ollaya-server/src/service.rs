@@ -317,6 +317,7 @@ impl Ollaya {
         spec: CreateSpec,
         progress: &(dyn Fn(String) + Send + Sync),
     ) -> Result<(), Error> {
+        use ollaya_registry::manifest::{ANNOTATION_GRAPH, ANNOTATION_PRECISION};
         use ollaya_registry::{Descriptor, media};
         let name = ModelName::parse(name)?;
         let from = ModelName::parse(&spec.from)?;
@@ -337,6 +338,21 @@ impl Ollaya {
             .read_manifest(&from)?
             .ok_or_else(|| Error::ModelNotFound(from.to_string()))?;
         let is_router = entry.manifest.layer(media::ROUTER).is_some();
+        if let Some(p @ ("fp16" | "fp32")) = spec.precision.as_deref()
+            && entry.manifest.layer(media::GRAPH_ONNX).is_some()
+            && !entry.manifest.layers_of(media::GRAPH_ONNX).any(|g| {
+                let precision = match g.annotations.get(ANNOTATION_PRECISION).map(String::as_str) {
+                    Some("fp16") => "fp16",
+                    _ => "fp32",
+                };
+                g.annotations.get(ANNOTATION_GRAPH).map(String::as_str) != Some("vision")
+                    && precision == p
+            })
+        {
+            return Err(Error::InvalidRequest(format!(
+                "PARAMETER precision {p:?}: {from} has no {p} graph"
+            )));
+        }
         let mut manifest = entry.manifest;
         let inherited: HashSet<String> = manifest.layers.iter().map(|l| l.digest.clone()).collect();
         let blob = |media_type: &str, bytes: Vec<u8>| -> Result<Descriptor, Error> {
