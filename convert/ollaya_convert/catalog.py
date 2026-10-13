@@ -135,6 +135,27 @@ LICENSE_MIT_NLI = ("DeBERTa-v3-large zero-shot v2.0 by Moritz Laurer "
                    "Note from the model card: part of the training data carries non-commercial licenses.\n")
 
 CATALOG = {
+    "d1": {
+        "namespace": "library", "model": "d1", "family": "d1", "author": "Liquid AI",
+        "license": "LFM Open License v1.0",
+        "license_text": "d1-3B by Liquid AI (https://huggingface.co/LiquidAI/d1-3B).\n\n" +
+            open(os.path.join(os.path.dirname(__file__), "families", "d1", "LICENSE"), encoding="utf-8").read(),
+        "tags": {
+            "3b": _gguf("d1-3b-q8_0", "LiquidAI/d1-3B-GGUF",
+                "bb1e436ea78eb96a3f1acb6da865f70c2fbeb563", "d1-3B-Q8_0.gguf",
+                "LiquidAI d1-3B: typed decisions with max-pooled answer forms, Q8_0.", "3B", ["multilingual"]),
+            "3b-vision": dict(_gguf("d1-3b-q8_0", "LiquidAI/d1-3B-GGUF",
+                "bb1e436ea78eb96a3f1acb6da865f70c2fbeb563", "d1-3B-Q8_0.gguf",
+                "LiquidAI d1-3B with its matching Q8_0 image projector.", "3B", ["multilingual"]),
+                mmproj="mmproj-d1-3B-Q8_0.gguf"),
+        },
+        "aliases": {"latest": "3b"},
+        "hf_license": ("lfm1.0", "https://huggingface.co/LiquidAI/d1-3B/blob/051bcc464b01b9f92942b364d9586b0ef5912432/LICENSE"),
+        "parity": "Ollaya's runner matches stock llama-server of the pinned build (b11146) on the same GGUF and "
+                  "projector, on the CPU and on CUDA (RTX 5090; RTX 4070 by the contributor), with prompts and "
+                  "answer-token groups from Liquid AI's pinned prompt.py: 650 text and 55 image questions on each "
+                  "device, every decision the same, option log-probabilities within 7.7e-6.",
+    },
     "laya": {
         "namespace": "library",
         "model": "laya",
