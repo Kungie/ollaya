@@ -116,6 +116,8 @@ struct QuestionLogits {
 struct AppState {
     model: Box<dyn Engine>,
     loaded: Loaded,
+    /// Where every call into `model` runs.
+    thread: ModelThread,
 }
 
 /// Load a GGUF model on llama.cpp.
@@ -459,20 +461,79 @@ fn warm_up(model: &dyn Engine) -> Result<(), Error> {
     Ok(())
 }
 
+type Job = Box<dyn FnOnce() + Send>;
+
+/// The one thread that calls into the model: it loads it, warms it up and runs every request, for
+/// as long as the runner lives.
+///
+/// ONNX Runtime 1.26 and newer pools the device streams of a run per calling thread, and frees a
+/// thread's pool once that thread has exited (microsoft/onnxruntime#28002). The decoder graphs run
+/// in parallel execution mode on CUDA ([`crate::decider::configure`]), so their `Scan` nodes run on
+/// an inter-op thread, where the stream collection of the `Scan` body is pooled too. That
+/// collection keeps a pointer to the CUDA stream of the last run that used it. Once the thread that
+/// started that run has exited, the next run frees the stream and the `Scan` reads freed memory:
+/// "Subgraph has nodes running on device ... this is not supported yet" on every later run, or a
+/// crash (#69). Tokio retires a blocking thread after 10 s idle, so with `spawn_blocking` the first
+/// request after a pause started on a new thread. Here the thread never changes.
+struct ModelThread {
+    jobs: std::sync::mpsc::Sender<Job>,
+}
+
+impl ModelThread {
+    fn spawn() -> Result<Self, Error> {
+        let (jobs, queue) = std::sync::mpsc::channel::<Job>();
+        std::thread::Builder::new()
+            .name("ollaya-model".into())
+            .spawn(move || {
+                for job in queue {
+                    job();
+                }
+            })
+            .map_err(|e| Error::Model(format!("cannot start the model thread: {e}")))?;
+        Ok(ModelThread { jobs })
+    }
+
+    /// Run `f` on the model thread, after the calls queued before it. A panic in `f` comes back
+    /// as an error, as it did from `spawn_blocking`, and the thread goes on to the next call.
+    async fn run<T: Send + 'static>(
+        &self,
+        f: impl FnOnce() -> T + Send + 'static,
+    ) -> Result<T, Error> {
+        let (done, result) = tokio::sync::oneshot::channel();
+        let job: Job = Box::new(move || {
+            let _ = done.send(std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)));
+        });
+        let stopped = || Error::Model("the model thread has stopped".into());
+        self.jobs.send(job).map_err(|_| stopped())?;
+        match result.await.map_err(|_| stopped())? {
+            Ok(out) => Ok(out),
+            Err(panic) => {
+                let message = panic
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| panic.downcast_ref::<String>().cloned())
+                    .unwrap_or_default();
+                Err(Error::Model(format!("the model panicked: {message}")))
+            }
+        }
+    }
+}
+
 /// Load, bind, announce the port on stdout, and serve until killed.
 pub async fn run(config: RunnerConfig) -> Result<(), Error> {
-    let (model, loaded) = tokio::task::spawn_blocking(move || {
-        let (model, loaded) = load(&config)?;
-        // A GPU model was warmed up while it was chosen.
-        if loaded.device == "cpu"
-            && let Err(e) = warm_up(model.as_ref())
-        {
-            tracing::warn!("warm-up failed: {e}");
-        }
-        Ok::<_, Error>((model, loaded))
-    })
-    .await
-    .map_err(|e| Error::Model(format!("load task failed: {e}")))??;
+    let thread = ModelThread::spawn()?;
+    let (model, loaded) = thread
+        .run(move || {
+            let (model, loaded) = load(&config)?;
+            // A GPU model was warmed up while it was chosen.
+            if loaded.device == "cpu"
+                && let Err(e) = warm_up(model.as_ref())
+            {
+                tracing::warn!("warm-up failed: {e}");
+            }
+            Ok::<_, Error>((model, loaded))
+        })
+        .await??;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .map_err(|e| Error::Model(e.to_string()))?;
@@ -492,7 +553,11 @@ pub async fn run(config: RunnerConfig) -> Result<(), Error> {
         let _ = writeln!(out, "{hello}");
         let _ = out.flush();
     }
-    let state = Arc::new(AppState { model, loaded });
+    let state = Arc::new(AppState {
+        model,
+        loaded,
+        thread,
+    });
     let app = Router::new()
         .route("/health", get(health))
         .route("/decide", post(decide))
@@ -512,29 +577,35 @@ async fn health(State(s): State<Arc<AppState>>) -> Json<Value> {
 }
 
 async fn decide(State(s): State<Arc<AppState>>, Json(req): Json<DecideRequest>) -> Response {
-    let result = tokio::task::spawn_blocking(move || -> Result<Value, Error> {
-        let images = req
-            .images
-            .iter()
-            .map(|i| crate::vision::from_base64(i))
-            .collect::<Result<Vec<_>, _>>()?;
-        let out = s.model.run_images(&req.state, &req.questions, &images)?;
-        let questions: Vec<QuestionLogits> = out
-            .questions
-            .into_iter()
-            .map(|QuestionOutput { logits, act_logits }| QuestionLogits { logits, act_logits })
-            .collect();
-        Ok(json!({
-            "questions": questions,
-            "input_tokens": out.input_tokens,
-            "state_tokens": out.state_tokens,
-            "state_truncated": out.state_truncated,
-        }))
-    })
-    .await;
+    let state = Arc::clone(&s);
+    let result = s
+        .thread
+        .run(move || -> Result<Value, Error> {
+            let images = req
+                .images
+                .iter()
+                .map(|i| crate::vision::from_base64(i))
+                .collect::<Result<Vec<_>, _>>()?;
+            let out = state
+                .model
+                .run_images(&req.state, &req.questions, &images)?;
+            let questions: Vec<QuestionLogits> = out
+                .questions
+                .into_iter()
+                .map(|QuestionOutput { logits, act_logits }| QuestionLogits { logits, act_logits })
+                .collect();
+            Ok(json!({
+                "questions": questions,
+                "input_tokens": out.input_tokens,
+                "state_tokens": out.state_tokens,
+                "state_truncated": out.state_truncated,
+            }))
+        })
+        .await
+        .and_then(|r| r);
     match result {
-        Ok(Ok(body)) => Json(body).into_response(),
-        Ok(Err(Error::Decision(ollaya_decision::Error::TooManyOptions { question, options, head_max_len }))) => (
+        Ok(body) => Json(body).into_response(),
+        Err(Error::Decision(ollaya_decision::Error::TooManyOptions { question, options, head_max_len })) => (
             StatusCode::BAD_REQUEST,
             Json(json!({"error": {
                 "code": "TOO_MANY_OPTIONS",
@@ -543,9 +614,8 @@ async fn decide(State(s): State<Arc<AppState>>, Json(req): Json<DecideRequest>) 
             }})),
         )
             .into_response(),
-        Ok(Err(Error::Decision(e))) => error(StatusCode::BAD_REQUEST, "INVALID_REQUEST", &e.to_string()),
-        Ok(Err(Error::Image(e))) => error(StatusCode::BAD_REQUEST, "INVALID_IMAGE", &e.to_string()),
-        Ok(Err(e)) => error(StatusCode::INTERNAL_SERVER_ERROR, "RUNNER_ERROR", &e.to_string()),
+        Err(Error::Decision(e)) => error(StatusCode::BAD_REQUEST, "INVALID_REQUEST", &e.to_string()),
+        Err(Error::Image(e)) => error(StatusCode::BAD_REQUEST, "INVALID_IMAGE", &e.to_string()),
         Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, "RUNNER_ERROR", &e.to_string()),
     }
 }
@@ -771,5 +841,84 @@ mod tests {
         };
         warm_up(&guard).unwrap();
         assert_eq!(*guard.asked.lock().unwrap(), [["unsafe"]]);
+    }
+
+    /// Records the OS thread of every run.
+    #[derive(Default)]
+    struct Threads(std::sync::Arc<Mutex<Vec<std::thread::ThreadId>>>);
+
+    impl Engine for Threads {
+        fn run(&self, _state: &Value, _questions: &Questions) -> Result<Output, Error> {
+            self.0.lock().unwrap().push(std::thread::current().id());
+            Ok(Output {
+                questions: Vec::new(),
+                input_tokens: 0,
+                state_tokens: 0,
+                state_truncated: false,
+            })
+        }
+    }
+
+    /// A runtime that retires an idle blocking thread after 1 ms instead of tokio's 10 s, so a
+    /// request after a pause would land on a new thread if requests ran on the blocking pool.
+    fn runtime_with_short_lived_blocking_threads() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .thread_keep_alive(std::time::Duration::from_millis(1))
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn requests_after_a_pause_run_on_the_thread_that_loaded_the_model() {
+        // Issue #69: ONNX Runtime frees a thread's device streams when the thread exits, while a
+        // `Scan` on an inter-op thread still points at them.
+        use axum::extract::{Json, State};
+        use std::sync::Arc;
+
+        use super::{AppState, DecideRequest, Loaded, ModelThread, decide};
+
+        runtime_with_short_lived_blocking_threads().block_on(async {
+            let thread = ModelThread::spawn().unwrap();
+            // `run` loads the model on the model thread.
+            let loader = thread.run(|| std::thread::current().id()).await.unwrap();
+            let threads = Threads::default();
+            let seen = threads.0.clone();
+            let state = Arc::new(AppState {
+                model: Box::new(threads),
+                loaded: Loaded {
+                    device: "cuda:0".into(),
+                    precision: "fp32".into(),
+                    engine: "onnx",
+                },
+                thread,
+            });
+            for _ in 0..3 {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                let request = DecideRequest {
+                    state: json!("s"),
+                    questions: json!({"x": {"type": "noul", "instructions": "Is it?"}}),
+                    images: Vec::new(),
+                };
+                let response = decide(State(state.clone()), Json(request)).await;
+                assert_eq!(response.status(), axum::http::StatusCode::OK);
+            }
+            assert_eq!(*seen.lock().unwrap(), [loader; 3]);
+        });
+    }
+
+    #[test]
+    fn a_panic_on_the_model_thread_is_an_error_and_the_thread_keeps_serving() {
+        runtime_with_short_lived_blocking_threads().block_on(async {
+            let thread = super::ModelThread::spawn().unwrap();
+            let before = thread.run(|| std::thread::current().id()).await.unwrap();
+            let panicked = thread
+                .run(|| -> u8 { panic!("a bug in an engine") })
+                .await
+                .unwrap_err();
+            assert!(panicked.to_string().contains("a bug in an engine"));
+            let after = thread.run(|| std::thread::current().id()).await.unwrap();
+            assert_eq!(after, before);
+        });
     }
 }
