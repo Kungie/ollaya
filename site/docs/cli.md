@@ -123,6 +123,14 @@ Downloads a model and verifies every layer against its sha256. Pulling a router 
 ollaya pull laya
 ```
 
+To pin an exact version, add the manifest digest that `ollaya list` shows the start of (the full one is `digest` in `/api/tags`). The manifest is fetched by that digest and checked against it before anything is stored, so the same command restores the same version after the tag has moved:
+
+```shell
+ollaya pull laya:en@sha256:c305a9276531a47000bf93559d2c94f1ed6cbb67055c9151084682dad7655e9d
+```
+
+With a tag, the version is stored under it (`laya:en`). Without one, `laya@sha256:<hex>` is stored and listed under that name. Other commands accept the same names: `ollaya run laya:en@sha256:<hex>` pulls first if `laya:en` is another version.
+
 ## ollaya list and ollaya ps
 
 `list` shows the models on this machine with their ID, size and when they were pulled. `ps` shows the loaded models, the device they run on (`cpu`, `cuda:0`), the precision and when they will be unloaded.

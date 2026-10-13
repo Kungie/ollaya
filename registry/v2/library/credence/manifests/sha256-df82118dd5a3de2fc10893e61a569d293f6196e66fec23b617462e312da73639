@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+  "config": {
+    "mediaType": "application/vnd.ollaya.config.v1+json",
+    "digest": "sha256:5d77d72845373b2465e600757bd9eb6d45b732e381ad29bc8fa72e1a22896c99",
+    "size": 504,
+    "urls": [
+      "https://ollaya.dev/blobs/sha256-5d77d72845373b2465e600757bd9eb6d45b732e381ad29bc8fa72e1a22896c99"
+    ]
+  },
+  "layers": [
+    {
+      "mediaType": "application/vnd.ollaya.weights.gguf",
+      "digest": "sha256:7c557d65b7427007fe49d226c8e6b45e7ab59425a8c39747a28647e9440e7ed1",
+      "size": 8718469216,
+      "urls": [
+        "https://huggingface.co/Txoka/Credence-v1-Gemma4-E4B/resolve/7d5ffc84145f34a3a76f7074e8c70bf1c1efce56/calibrated/model-Q8_0.gguf"
+      ],
+      "annotations": {
+        "org.ollaya.quantization": "Q8_0"
+      }
+    },
+    {
+      "mediaType": "application/vnd.ollaya.decision",
+      "digest": "sha256:82df1e25c7660dea7bf330053744b7c5ca5cda6db8a23702663c08bdfc2060a2",
+      "size": 2076,
+      "urls": [
+        "https://ollaya.dev/blobs/sha256-82df1e25c7660dea7bf330053744b7c5ca5cda6db8a23702663c08bdfc2060a2"
+      ]
+    },
+    {
+      "mediaType": "application/vnd.ollaya.calibration",
+      "digest": "sha256:3769c01c5e88f66b7976409f086420798c78e035cd96634442479d3b8c44c3e6",
+      "size": 240,
+      "urls": [
+        "https://ollaya.dev/blobs/sha256-3769c01c5e88f66b7976409f086420798c78e035cd96634442479d3b8c44c3e6"
+      ]
+    },
+    {
+      "mediaType": "application/vnd.ollaya.license",
+      "digest": "sha256:a5aa25916b909d9ffa8a4db664715773e41a57f4dbcff00cea4b08db1f60408e",
+      "size": 10880,
+      "urls": [
+        "https://ollaya.dev/blobs/sha256-a5aa25916b909d9ffa8a4db664715773e41a57f4dbcff00cea4b08db1f60408e"
+      ]
+    },
+    {
+      "mediaType": "application/vnd.ollaya.projector.gguf",
+      "digest": "sha256:ddf46c21d7078e95338cfc22306b19b276a29a5ad089023449dd54d4b6170a51",
+      "size": 990372672,
+      "urls": [
+        "https://huggingface.co/EldanRing/Winnow-E4B/resolve/734302fe5fbfeb3f21a7ece62653c9539be4aaf3/gguf/mmproj-Winnow-E4B.gguf"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+  "config": {
+    "mediaType": "application/vnd.ollaya.config.v1+json",
+    "digest": "sha256:6f14b8275a896c364d9556688c47199347e78319f6b723087bddfc69cec099eb",
+    "size": 476,
+    "urls": [
+      "https://ollaya.dev/blobs/sha256-6f14b8275a896c364d9556688c47199347e78319f6b723087bddfc69cec099eb"
+    ]
+  },
+  "layers": [
+    {
+      "mediaType": "application/vnd.ollaya.graph.onnx",
+      "digest": "sha256:d171892404203e8c6a5a39a1aa51b38880fa0b19083ebf431bd50e6faaf31038",
+      "size": 11093224,
+      "urls": [
+        "https://ollaya.dev/blobs/sha256-d171892404203e8c6a5a39a1aa51b38880fa0b19083ebf431bd50e6faaf31038"
+      ],
+      "annotations": {
+        "org.ollaya.precision": "fp32"
+      }
+    },
+    {
+      "mediaType": "application/vnd.ollaya.weights",
+      "digest": "sha256:c8d38178b51c845d6befca9e2c8a579889055cecf510fdbc85dbdf7bb867a0d6",
+      "size": 4268059288,
+      "urls": [
+        "https://huggingface.co/PostHog/jeeves/resolve/8622b7d1652a9dcb8629486b84dce9e8d690c5cd/model-00001-of-00005.safetensors"
+      ]
+    },
+    {
+      "mediaType": "application/vnd.ollaya.weights",
+      "digest": "sha256:a25e1a608a5be9cadef95e3f40fdca5c17b6c21e86481186adfd7a8a1f5b8f40",
+      "size": 4266315424,
+      "urls": [
+        "https://huggingface.co/PostHog/jeeves/resolve/8622b7d1652a9dcb8629486b84dce9e8d690c5cd/model-00002-of-00005.safetensors"
+      ]
+    },
+    {
+      "mediaType": "application/vnd.ollaya.weights",
+      "digest": "sha256:ab693e0b5940052ad04450fccfd12c87a49ce9ad23984bdfc07ee20d3ab654fe",
+      "size": 4215378072,
+      "urls": [
+        "https://huggingface.co/PostHog/jeeves/resolve/8622b7d1652a9dcb8629486b84dce9e8d690c5cd/model-00003-of-00005.safetensors"
+      ]
+    },
+    {
+      "mediaType": "application/vnd.ollaya.weights",
+      "digest": "sha256:9942b7369222a4403809a05f1da21f53b006f2d5cf72651483dda48c4931ed9a",
+      "size": 3123665648,
+      "urls": [
+        "https://huggingface.co/PostHog/jeeves/resolve/8622b7d1652a9dcb8629486b84dce9e8d690c5cd/model-00004-of-00005.safetensors"
+      ]
+    },
+    {
+      "mediaType": "application/vnd.ollaya.weights",
+      "digest": "sha256:dd63614f1dc80dce2d83be3f3e69af1f8a0ebc8add9b8e0abf3910f563e44344",
+      "size": 2034237568,
+      "urls": [
+        "https://huggingface.co/PostHog/jeeves/resolve/8622b7d1652a9dcb8629486b84dce9e8d690c5cd/model-00005-of-00005.safetensors"
+      ]
+    },
+    {
+      "mediaType": "application/vnd.ollaya.weights",
+      "digest": "sha256:2ab935dea9eecf263086d9ed6dfe97fd5558193663ecae102fd3c50ae6878d60",
+      "size": 8392767,
+      "urls": [
+        "https://huggingface.co/PostHog/jeeves/resolve/8622b7d1652a9dcb8629486b84dce9e8d690c5cd/head.pt"
+      ]
+    },
+    {
+      "mediaType": "application/vnd.ollaya.tokenizer",
+      "digest": "sha256:06b9509352d2af50381ab2247e083b80d32d5c0aba91c272ca9ff729b6a0e523",
+      "size": 19989325,
+      "urls": [
+        "https://huggingface.co/jaredpalmer/kev-9b/resolve/2629c06a5aeb0feb3b9783bafed17ed8f39ecf5c/tokenizer.json"
+      ]
+    },
+    {
+      "mediaType": "application/vnd.ollaya.decision",
+      "digest": "sha256:96633b0ae45b2922287afebff86f01a946febaa5f6ecc8b551a53334a11e059e",
+      "size": 2273,
+      "urls": [
+        "https://ollaya.dev/blobs/sha256-96633b0ae45b2922287afebff86f01a946febaa5f6ecc8b551a53334a11e059e"
+      ]
+    },
+    {
+      "mediaType": "application/vnd.ollaya.calibration",
+      "digest": "sha256:b3c01d4ac3e35e77871a346312251323e0a3c922004b4e2f94750270bf52df1f",
+      "size": 217,
+      "urls": [
+        "https://ollaya.dev/blobs/sha256-b3c01d4ac3e35e77871a346312251323e0a3c922004b4e2f94750270bf52df1f"
+      ]
+    },
+    {
+      "mediaType": "application/vnd.ollaya.license",
+      "digest": "sha256:257d23f4db37a144b28d64a18eac58471e90ea6bc98c1265669fa4fc41eb117d",
+      "size": 10437,
+      "urls": [
+        "https://ollaya.dev/blobs/sha256-257d23f4db37a144b28d64a18eac58471e90ea6bc98c1265669fa4fc41eb117d"
+      ]
+    }
+  ]
+}

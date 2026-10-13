@@ -26,9 +26,11 @@ pub struct Ollaya {
     pub scheduler: Arc<Scheduler>,
     /// Custom presets, in the model store.
     pub presets: PresetStore,
-    /// In-flight pulls by model name: a second pull of the same model joins the first.
-    pulls: Mutex<HashMap<String, broadcast::Sender<PullEvent>>>,
-    /// Model names a create is writing. Lock order: `pulls`, then `creating`.
+    /// In-flight pulls by the manifest file they write ([`ModelName::stored`]), with the name
+    /// pulled: a second pull of the same name joins the first.
+    pulls: Mutex<HashMap<String, (String, broadcast::Sender<PullEvent>)>>,
+    /// Manifest files a create is writing ([`ModelName::stored`]). Lock order: `pulls`, then
+    /// `creating`.
     creating: Mutex<HashSet<String>>,
 }
 
@@ -235,19 +237,25 @@ impl Ollaya {
     }
 
     /// Pull a model, streaming progress. Concurrent pulls of one model share a single download;
-    /// when every receiver is gone, the pull stops (partial blobs stay for the next pull).
+    /// when every receiver is gone, the pull stops (partial blobs stay for the next pull). A pull
+    /// that would write the same tag as another one in flight, pinned to another digest or to
+    /// none, is busy rather than joined: the two would store different manifests.
     pub fn pull(self: &Arc<Self>, model: &str) -> Result<broadcast::Receiver<PullEvent>, Error> {
         let name = ModelName::parse(model)?;
         let key = name.to_string();
+        let file = name.stored();
         let mut pulls = self.pulls.lock().unwrap();
-        if let Some(tx) = pulls.get(&key) {
-            return Ok(tx.subscribe());
+        if let Some((pulling, tx)) = pulls.get(&file) {
+            if *pulling == key {
+                return Ok(tx.subscribe());
+            }
+            return Err(Error::Busy(key));
         }
-        if self.creating.lock().unwrap().contains(&key) {
+        if self.creating.lock().unwrap().contains(&file) {
             return Err(Error::Busy(key));
         }
         let (tx, rx) = broadcast::channel(1024);
-        pulls.insert(key.clone(), tx.clone());
+        pulls.insert(file.clone(), (key.clone(), tx.clone()));
         drop(pulls);
         let this = self.clone();
         tokio::spawn(async move {
@@ -265,7 +273,7 @@ impl Ollaya {
                 r = this.puller.pull(&name, &progress) => Some(r),
                 () = abandoned => None,
             };
-            this.pulls.lock().unwrap().remove(&key);
+            this.pulls.lock().unwrap().remove(&file);
             match result {
                 Some(Ok(_)) => drop(tx.send(PullEvent::Done)),
                 Some(Err(e)) => drop(tx.send(PullEvent::Failed(Arc::new(e.into())))),
@@ -277,9 +285,9 @@ impl Ollaya {
 
     /// Whether a pull or a create is writing `name` right now.
     pub fn is_busy(&self, name: &ModelName) -> bool {
-        let key = name.to_string();
+        let file = name.stored();
         let pulls = self.pulls.lock().unwrap();
-        pulls.contains_key(&key) || self.creating.lock().unwrap().contains(&key)
+        pulls.contains_key(&file) || self.creating.lock().unwrap().contains(&file)
     }
 
     pub fn list(&self) -> Result<Vec<Entry>, Error> {
@@ -321,15 +329,15 @@ impl Ollaya {
         let name = ModelName::parse(name)?;
         let from = ModelName::parse(&spec.from)?;
         let _claim = {
-            let key = name.to_string();
+            let file = name.stored();
             let pulls = self.pulls.lock().unwrap();
             let mut creating = self.creating.lock().unwrap();
-            if pulls.contains_key(&key) || !creating.insert(key.clone()) {
-                return Err(Error::Busy(key));
+            if pulls.contains_key(&file) || !creating.insert(file.clone()) {
+                return Err(Error::Busy(name.to_string()));
             }
             Claim {
                 set: &self.creating,
-                key,
+                key: file,
             }
         };
         let entry = self

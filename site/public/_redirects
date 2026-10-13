@@ -7,3 +7,8 @@
 # Tag pages: /library/laya:en is served from library/laya/tags/en.html with status 200, so the
 # URL keeps its colon (Cloudflare would otherwise 307 it to /library/laya%3Aen).
 /library/:model:* /library/:model/tags/:splat 200
+
+# Manifests by digest: /v2/<namespace>/<model>/manifests/sha256:<hex> is served from the file
+# sha256-<hex> (a colon can't be in a file name on Windows), with status 200 rather than a 307 to
+# %3A. Every manifest published under a tag is kept there (docs/decisions/0006-manifest-retention.md).
+/v2/:namespace/:model/manifests/sha256:* /v2/:namespace/:model/manifests/sha256-:splat 200

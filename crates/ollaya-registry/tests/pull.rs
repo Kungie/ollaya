@@ -275,3 +275,282 @@ async fn a_model_this_client_cannot_run_downloads_nothing_but_its_config() {
     puller.pull(&name, &|_| {}).await.unwrap();
     assert!(weights_blob.exists());
 }
+
+// Pulls by digest (`name@sha256:<hex>`), against a registry laid out like the website's.
+
+/// The website's registry: static files, with its rewrite for manifests by digest
+/// (`site/public/_redirects`): `/v2/<ns>/<model>/manifests/sha256:<hex>` is served from the file
+/// `sha256-<hex>`, since a colon can't be in a file name on Windows. A missing manifest is the
+/// site's HTML 404 page, or, with `html_200`, an HTML page with status 200, as some static hosts
+/// answer any path.
+async fn serve_site(dir: &std::path::Path, html_200: bool) -> String {
+    use axum::http::{StatusCode, header};
+    let root = dir.to_owned();
+    let manifests = move |axum::extract::Path(path): axum::extract::Path<String>| {
+        let root = root.clone();
+        async move {
+            let path = path.replacen("/manifests/sha256:", "/manifests/sha256-", 1);
+            match std::fs::read(root.join("v2").join(path)) {
+                Ok(bytes) => bytes.into_response(),
+                Err(_) => (
+                    if html_200 {
+                        StatusCode::OK
+                    } else {
+                        StatusCode::NOT_FOUND
+                    },
+                    [(header::CONTENT_TYPE, "text/html")],
+                    "<!DOCTYPE html><html><title>Page not found</title></html>",
+                )
+                    .into_response(),
+            }
+        }
+    };
+    let app = axum::Router::new()
+        .route("/v2/{*path}", axum::routing::get(manifests))
+        .fallback_service(tower_http::services::ServeDir::new(dir));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}")
+}
+
+/// Keep the manifest `tag` points to now as `sha256-<hex>`, as `package.py` does when it writes
+/// a tag. Returns its digest.
+fn retain(root: &std::path::Path, tag: &str) -> String {
+    let dir = root.join("v2/library/test/manifests");
+    let bytes = std::fs::read(dir.join(tag)).unwrap();
+    let hex = sha256_hex(&bytes);
+    std::fs::write(dir.join(format!("sha256-{hex}")), &bytes).unwrap();
+    format!("sha256:{hex}")
+}
+
+/// Publish `weights` under `test:<tag>` at its own path, so that versions don't overwrite each
+/// other's weights (as two Hugging Face commits don't), and keep the manifest by digest.
+fn publish_version(root: &std::path::Path, base: &str, tag: &str, weights: &[u8]) -> String {
+    let hex = sha256_hex(weights);
+    std::fs::create_dir_all(root.join("hf")).unwrap();
+    std::fs::write(root.join(format!("hf/{hex}.safetensors")), weights).unwrap();
+    let config = br#"{"model_format":"onnx","family":"test"}"#;
+    std::fs::write(root.join("hf/config.json"), config).unwrap();
+    let manifest = Manifest {
+        schema_version: 2,
+        media_type: MANIFEST_V2.into(),
+        config: descriptor(media::CONFIG, config, format!("{base}/hf/config.json")),
+        layers: vec![descriptor(
+            media::WEIGHTS,
+            weights,
+            format!("{base}/hf/{hex}.safetensors"),
+        )],
+    };
+    let dir = root.join("v2/library/test/manifests");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(tag), serde_json::to_vec(&manifest).unwrap()).unwrap();
+    retain(root, tag)
+}
+
+fn local_digest(store: &Store, name: &str) -> Option<String> {
+    store
+        .read_manifest(&ModelName::parse(name).unwrap())
+        .unwrap()
+        .map(|e| e.digest)
+}
+
+#[tokio::test]
+async fn pulls_by_digest_alone_and_stores_under_the_digest_tag() {
+    let remote = tempfile::tempdir().unwrap();
+    let base = serve_site(remote.path(), false).await;
+    let weights = pseudo_random(1 << 20);
+    let digest = publish_version(remote.path(), &base, "en", &weights);
+
+    let local = tempfile::tempdir().unwrap();
+    let store = Store::open(local.path()).unwrap();
+    let puller = Puller::new(store.clone()).unwrap();
+    let name = ModelName::parse(&format!("{base}/library/test@{digest}")).unwrap();
+    puller.pull(&name, &|_| {}).await.unwrap();
+
+    let hex = &digest["sha256:".len()..];
+    let path = store.manifest_path(&name);
+    assert!(path.ends_with(format!("test/sha256-{hex}")), "{path:?}");
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        std::fs::read(remote.path().join("v2/library/test/manifests/en")).unwrap()
+    );
+    let entries = store.list().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].digest, digest);
+    assert_eq!(entries[0].name.digest.as_ref(), Some(&digest));
+    assert!(
+        entries[0]
+            .name
+            .to_string()
+            .ends_with(&format!("/library/test@{digest}"))
+    );
+    let weights_blob = store
+        .blob_path(&format!("sha256:{}", sha256_hex(&weights)))
+        .unwrap();
+    assert_eq!(std::fs::read(weights_blob).unwrap(), weights);
+    // The tag it was published under was not touched.
+    assert_eq!(
+        local_digest(&store, &format!("{base}/library/test:en")),
+        None
+    );
+}
+
+#[tokio::test]
+async fn a_moved_tag_still_pulls_the_pinned_manifest_under_the_tag() {
+    let remote = tempfile::tempdir().unwrap();
+    let base = serve_site(remote.path(), false).await;
+    let (w1, w2) = (pseudo_random(1 << 20), pseudo_random(3 << 19));
+    let d1 = publish_version(remote.path(), &base, "en", &w1);
+    let d2 = publish_version(remote.path(), &base, "en", &w2); // the tag moves
+    assert_ne!(d1, d2);
+
+    let local = tempfile::tempdir().unwrap();
+    let store = Store::open(local.path()).unwrap();
+    let puller = Puller::new(store.clone()).unwrap();
+    let en = format!("{base}/library/test:en");
+
+    // By tag: the tag's manifest now.
+    puller
+        .pull(&ModelName::parse(&en).unwrap(), &|_| {})
+        .await
+        .unwrap();
+    assert_eq!(local_digest(&store, &en), Some(d2.clone()));
+
+    // By tag and digest: the old manifest, under the tag, with its own blobs.
+    let pinned = ModelName::parse(&format!("{en}@{d1}")).unwrap();
+    let manifest = puller.pull(&pinned, &|_| {}).await.unwrap();
+    assert_eq!(local_digest(&store, &en), Some(d1.clone()));
+    assert!(store.read_manifest(&pinned).unwrap().is_some());
+    assert!(manifest.blobs().all(|d| store.has_blob(d)));
+    let w1_blob = store
+        .blob_path(&format!("sha256:{}", sha256_hex(&w1)))
+        .unwrap();
+    assert_eq!(std::fs::read(w1_blob).unwrap(), w1);
+
+    // Pulling it again downloads nothing and changes nothing; a pull by tag moves it on.
+    let seen = Mutex::new(Vec::<Progress>::new());
+    puller
+        .pull(&pinned, &|p| seen.lock().unwrap().push(p))
+        .await
+        .unwrap();
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .filter(|p| p.digest.is_some())
+            .all(|p| p.completed == p.total)
+    );
+    assert_eq!(local_digest(&store, &en), Some(d1));
+    puller
+        .pull(&ModelName::parse(&en).unwrap(), &|_| {})
+        .await
+        .unwrap();
+    assert_eq!(local_digest(&store, &en), Some(d2));
+}
+
+#[tokio::test]
+async fn the_tag_of_a_pinned_pull_is_where_it_is_stored() {
+    // `name:tag@digest` is not checked against the registry's tags: the digest says which
+    // manifest, the tag where it goes. A registry serves a model's manifests by digest whatever
+    // tag published them.
+    let remote = tempfile::tempdir().unwrap();
+    let base = serve_site(remote.path(), false).await;
+    let d1 = publish_version(remote.path(), &base, "en", &pseudo_random(1 << 20));
+
+    let local = tempfile::tempdir().unwrap();
+    let store = Store::open(local.path()).unwrap();
+    let puller = Puller::new(store.clone()).unwrap();
+    let pinned = format!("{base}/library/test:pinned@{d1}");
+    puller
+        .pull(&ModelName::parse(&pinned).unwrap(), &|_| {})
+        .await
+        .unwrap();
+    assert_eq!(
+        local_digest(&store, &format!("{base}/library/test:pinned")),
+        Some(d1)
+    );
+    assert!(
+        !remote
+            .path()
+            .join("v2/library/test/manifests/pinned")
+            .exists()
+    );
+}
+
+#[tokio::test]
+async fn a_manifest_that_does_not_match_its_digest_is_refused_before_any_download() {
+    let remote = tempfile::tempdir().unwrap();
+    let base = serve_site(remote.path(), false).await;
+    let (w1, w2) = (pseudo_random(1 << 20), pseudo_random(3 << 19));
+    let d1 = publish_version(remote.path(), &base, "en", &w1);
+    let d2 = publish_version(remote.path(), &base, "en", &w2);
+
+    let local = tempfile::tempdir().unwrap();
+    let store = Store::open(local.path()).unwrap();
+    let puller = Puller::new(store.clone()).unwrap();
+    let en = format!("{base}/library/test:en");
+    puller
+        .pull(&ModelName::parse(&en).unwrap(), &|_| {})
+        .await
+        .unwrap();
+    assert_eq!(local_digest(&store, &en), Some(d2.clone()));
+
+    // The registry serves another manifest (here the current one) under d1's name.
+    let dir = remote.path().join("v2/library/test/manifests");
+    std::fs::copy(
+        dir.join(format!("sha256-{}", &d2[7..])),
+        dir.join(format!("sha256-{}", &d1[7..])),
+    )
+    .unwrap();
+    let seen = Mutex::new(Vec::<Progress>::new());
+    let err = puller
+        .pull(&ModelName::parse(&format!("{en}@{d1}")).unwrap(), &|p| {
+            seen.lock().unwrap().push(p)
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::ManifestMismatch { got, .. } if *got == d2),
+        "{err}"
+    );
+    assert!(err.to_string().contains("nothing was stored"), "{err}");
+    // Nothing downloaded, and the tag still holds what it held.
+    assert!(seen.lock().unwrap().iter().all(|p| p.digest.is_none()));
+    let w1_blob = store
+        .blob_path(&format!("sha256:{}", sha256_hex(&w1)))
+        .unwrap();
+    assert!(!w1_blob.exists());
+    assert_eq!(local_digest(&store, &en), Some(d2));
+    assert_eq!(store.list().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn an_unknown_digest_is_its_own_error_not_an_html_page() {
+    let unknown = format!("sha256:{}", "0".repeat(64));
+    for html_200 in [false, true] {
+        let remote = tempfile::tempdir().unwrap();
+        let base = serve_site(remote.path(), html_200).await;
+        publish_version(remote.path(), &base, "en", &pseudo_random(1 << 20));
+        let local = tempfile::tempdir().unwrap();
+        let store = Store::open(local.path()).unwrap();
+        let puller = Puller::new(store.clone()).unwrap();
+        let name = ModelName::parse(&format!("{base}/library/test:en@{unknown}")).unwrap();
+        let err = puller.pull(&name, &|_| {}).await.unwrap_err();
+        if html_200 {
+            // A host that answers every path: the page is not the manifest the digest names.
+            assert!(matches!(err, Error::ManifestMismatch { .. }), "{err}");
+        } else {
+            assert!(
+                matches!(&err, Error::DigestNotFound(n) if *n == name.to_string()),
+                "{err}"
+            );
+            assert!(
+                err.to_string()
+                    .ends_with("not found: the registry has no manifest with that digest"),
+                "{err}"
+            );
+        }
+        assert!(store.list().unwrap().is_empty());
+    }
+}

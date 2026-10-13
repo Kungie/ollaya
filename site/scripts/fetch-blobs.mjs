@@ -1,8 +1,9 @@
 // Downloads the derived registry blobs (ONNX graphs, configs, calibration) that the manifests in
 // ../registry/v2 point to, into ../registry/blobs, checking each one's sha256. Those files are
 // build outputs of convert/ollaya_convert/package.py and are not in git, so a fresh checkout needs
-// this before `npm run build` or a deploy. Blobs already present are kept; weights are never
-// fetched (they stay on their authors' Hugging Face repos).
+// this before `npm run build` or a deploy. That includes the blobs of the manifests kept by digest
+// (manifests/sha256-<hex>), which the live site still serves. Blobs already present are kept;
+// weights are never fetched (they stay on their authors' Hugging Face repos).
 //
 //   node scripts/fetch-blobs.mjs
 

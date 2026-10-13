@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+  "config": {
+    "mediaType": "application/vnd.ollaya.config.v1+json",
+    "digest": "sha256:baa7ed3dbc5b65816ee4a0d88a1335384934973af587f10a22de2c0c7e2bd37e",
+    "size": 465,
+    "urls": [
+      "https://ollaya.dev/blobs/sha256-baa7ed3dbc5b65816ee4a0d88a1335384934973af587f10a22de2c0c7e2bd37e"
+    ]
+  },
+  "layers": [
+    {
+      "mediaType": "application/vnd.ollaya.graph.onnx",
+      "digest": "sha256:403657f8e9ff2e7f191397b7e4ca42aa378e80409107592cb124bb24f506720a",
+      "size": 11033112,
+      "urls": [
+        "https://ollaya.dev/blobs/sha256-403657f8e9ff2e7f191397b7e4ca42aa378e80409107592cb124bb24f506720a"
+      ],
+      "annotations": {
+        "org.ollaya.precision": "fp32"
+      }
+    },
+    {
+      "mediaType": "application/vnd.ollaya.weights",
+      "digest": "sha256:ee8ce585b3cedd93206dd149b09b4bdd683174874211f85c77a36090b90c9fdd",
+      "size": 8411558400,
+      "urls": [
+        "https://huggingface.co/Mapika/decider-4b/resolve/eb5fbdfc9448473ec25e399882912863afbdb70e/model.safetensors"
+      ]
+    },
+    {
+      "mediaType": "application/vnd.ollaya.tokenizer",
+      "digest": "sha256:06b9509352d2af50381ab2247e083b80d32d5c0aba91c272ca9ff729b6a0e523",
+      "size": 19989325,
+      "urls": [
+        "https://huggingface.co/Mapika/decider-4b/resolve/eb5fbdfc9448473ec25e399882912863afbdb70e/tokenizer.json"
+      ]
+    },
+    {
+      "mediaType": "application/vnd.ollaya.decision",
+      "digest": "sha256:80132837e2865b8df11f2b3efd8e82dfb7ff7d8b3c33ed2f7798a350800461fe",
+      "size": 8740,
+      "urls": [
+        "https://ollaya.dev/blobs/sha256-80132837e2865b8df11f2b3efd8e82dfb7ff7d8b3c33ed2f7798a350800461fe"
+      ]
+    },
+    {
+      "mediaType": "application/vnd.ollaya.calibration",
+      "digest": "sha256:7c9333f3da101f0017db6a3569f0504f29f84e4fb760d73809e88ae05b2207c1",
+      "size": 290,
+      "urls": [
+        "https://ollaya.dev/blobs/sha256-7c9333f3da101f0017db6a3569f0504f29f84e4fb760d73809e88ae05b2207c1"
+      ]
+    },
+    {
+      "mediaType": "application/vnd.ollaya.license",
+      "digest": "sha256:b4d9d0d19903c735682520519fbd533c604c092dc80098efd5407806e38f0057",
+      "size": 10283,
+      "urls": [
+        "https://ollaya.dev/blobs/sha256-b4d9d0d19903c735682520519fbd533c604c092dc80098efd5407806e38f0057"
+      ]
+    }
+  ]
+}

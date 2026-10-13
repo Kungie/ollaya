@@ -5,7 +5,10 @@
 //  3. No public host name is hard-coded in sources (it must come from SITE_ORIGIN).
 //  4. Every internal href/src in every page resolves to a file in dist/.
 //  5. /install.sh is the real installer (../scripts/install.sh), byte for byte.
+//  6. Every tag's manifest under /v2/ is also there by its digest (sha256-<hex>, served as
+//     sha256:<hex> through _redirects), and every manifest named by a digest hashes to it.
 
+import { createHash } from 'node:crypto'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -100,8 +103,39 @@ const installer = await readFile(join(root, '..', 'scripts', 'install.sh')).catc
 const served = await readFile(join(dist, 'install.sh')).catch(() => null)
 if (!installer || !served || !installer.equals(served)) errors.push('dist/install.sh is not a copy of ../scripts/install.sh')
 
+// 6. Manifests by digest ------------------------------------------------------------------------------
+// The digests are what `ollaya pull <name>@sha256:<hex>` asks for; docs/decisions/0006-manifest-retention.md.
+const DIGEST_FILE = /^sha256-[0-9a-f]{64}$/
+let tagManifests = 0
+let digestManifests = 0
+for (const file of files.filter((f) => /^v2\/[^/]+\/[^/]+\/manifests\/[^/]+$/.test(f))) {
+  const name = file.split('/').pop()
+  const bytes = await readFile(join(dist, file))
+  const hex = createHash('sha256').update(bytes).digest('hex')
+  if (DIGEST_FILE.test(name)) {
+    digestManifests++
+    if (name !== `sha256-${hex}`) errors.push(`dist/${file} is sha256:${hex}, not the manifest its name says`)
+    continue
+  }
+  tagManifests++
+  const kept = file.replace(/[^/]+$/, `sha256-${hex}`)
+  const twin = await readFile(join(dist, kept)).catch(() => null)
+  if (!twin?.equals(bytes)) {
+    errors.push(`dist/${file} has no copy by digest (${kept}); run node scripts/archive-manifests.mjs and commit it`)
+  }
+}
+if (
+  tagManifests &&
+  !redirects.includes('/v2/:namespace/:model/manifests/sha256:*')
+) {
+  errors.push('dist/_redirects does not serve /v2/<namespace>/<model>/manifests/sha256:<hex>')
+}
+
 if (errors.length) {
   console.error(`check: ${errors.length} problem(s)\n  - ${errors.join('\n  - ')}`)
   process.exit(1)
 }
-console.log(`check: ok (${files.length} files, ${pages} pages, all internal links resolve, no hard-coded hosts)`)
+console.log(
+  `check: ok (${files.length} files, ${pages} pages, all internal links resolve, no hard-coded hosts; ` +
+    `${tagManifests} tag manifests, ${digestManifests} manifests by digest)`,
+)

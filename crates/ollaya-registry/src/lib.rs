@@ -12,12 +12,19 @@ pub use store::{Entry, Store};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("invalid model name {0:?}; expected [host/][namespace/]model[:tag]")]
+    #[error("invalid model name {0:?}; expected [host/][namespace/]model[:tag][@sha256:<hex>]")]
     InvalidName(String),
     #[error("invalid digest {0:?}")]
     InvalidDigest(String),
     #[error("model {0} not found")]
     NotFound(String),
+    /// A pull by digest (`name@sha256:<hex>`) that the registry has no manifest for.
+    #[error("model {0} not found: the registry has no manifest with that digest")]
+    DigestNotFound(String),
+    /// A manifest that is not the one a name's digest pins: what the registry served for
+    /// `name@sha256:<hex>`, or what was about to be stored under it. Nothing is stored.
+    #[error("the manifest for {name} is {got}, not the one its digest names; nothing was stored")]
+    ManifestMismatch { name: String, got: String },
     #[error("digest mismatch: expected {expected}, got {got}")]
     DigestMismatch { expected: String, got: String },
     #[error("download stalled: {0}")]

@@ -32,7 +32,10 @@ The build fails if:
 - an internal link in `dist/` points to a missing file;
 - a page still says "coming soon", "pre-release", "illustrative output" or "being built";
 - `dist/install.sh` is not byte-for-byte `../scripts/install.sh`;
-- a registry manifest's blob URL is not under `SITE_ORIGIN`.
+- a registry manifest's blob URL is not under `SITE_ORIGIN`, or a blob it points to is missing
+  from `../registry/blobs` (`node scripts/fetch-blobs.mjs` downloads them);
+- a tag's manifest has no copy by digest (`manifests/sha256-<hex>`; `node scripts/archive-manifests.mjs`
+  writes it), or such a copy does not hash to its name.
 
 ## Layout
 
@@ -42,6 +45,8 @@ scripts/gen-content.mjs Markdown (docs/, content/) → src/generated/content.ts 
 scripts/gen-registry.mjs ../registry manifests + config blobs → src/generated/registry.ts (git-ignored)
 scripts/build.mjs       dist/: public/, Tailwind, asset hashes, pages, install.sh, registry copy
 scripts/check.mjs       Post-build checks on dist/
+scripts/fetch-blobs.mjs Downloads the derived blobs the manifests point to into ../registry/blobs
+scripts/archive-manifests.mjs Keeps each tag's manifest by digest in ../registry (ADR 0006)
 src/build.tsx           Page list and URL → file mapping; renders every page, 404, sitemap, …
 src/pages/              Page components: home, search, library, download, docs, 404, text files
 src/components/         Layout, header, footer, logo, icons, code blocks, tabs, badges
@@ -61,6 +66,7 @@ library/laya.html  library/laya/tags.html  library/laya:<tag>.html  library/laya
 library.html (meta refresh to /search)  search.json  install.sh  robots.txt  sitemap.xml
 favicon.svg  static/{app.css, app.js, logo.svg, og.png}  _headers  _redirects
 v2/<namespace>/<model>/manifests/<tag>  blobs/sha256-<hex>     (copied from ../registry)
+v2/<namespace>/<model>/manifests/sha256-<hex>   every manifest ever published under a tag, by digest
 ```
 
 URLs have no `.html` suffix: `/docs/api` is served from `docs/api.html`.
@@ -103,6 +109,10 @@ The site is built for **Cloudflare Workers static assets**, with no `main` scrip
   - a 200 rewrite from `/library/<model>:<tag>` to `library/<model>/tags/<tag>.html`. Cloudflare's
     asset server would otherwise percent-encode the colon (307 to `/library/laya%3Aen`). Other
     hosts serve `library/laya:en.html` directly.
+  - a 200 rewrite from `/v2/<namespace>/<model>/manifests/sha256:<hex>` to the file
+    `sha256-<hex>`: the manifests `ollaya pull <name>@sha256:<hex>` fetches
+    ([ADR 0006](../docs/decisions/0006-manifest-retention.md)). Other hosts need the same rewrite
+    for pulls by digest; pulls by tag work without it.
 
 `python3 -m http.server` works for spot checks, but it has no clean URLs (open `/search.html`).
 
@@ -130,6 +140,13 @@ Manifests carry absolute blob URLs, so the build checks that they point at `SITE
 the registry for the origin you deploy to. Pages never write under `/v2/` or `/blobs/`, and
 `robots.txt` keeps crawlers out of both.
 
+**Old versions stay.** `package.py` also writes each tag's manifest as
+`manifests/sha256-<hex>`, named by its sha256, and those files are never deleted. They are what
+`ollaya pull <name>@sha256:<hex>` fetches after the tag has moved, so every deploy has to carry
+their blobs forward: run `node scripts/fetch-blobs.mjs` before deploying from a checkout that may
+lack some (it downloads them from the live site), and never deploy with
+`OLLAYA_ALLOW_MISSING_BLOBS=1`. See [ADR 0006](../docs/decisions/0006-manifest-retention.md).
+
 ## Installer
 
 `/install.sh` is `../scripts/install.sh`, copied unchanged at build time (the check compares the
@@ -141,6 +158,7 @@ Linux. Edit the script there, never in `site/`.
 
 ```sh
 npx wrangler login     # or: export CLOUDFLARE_API_TOKEN=... ("Edit Cloudflare Workers" token template)
+node scripts/fetch-blobs.mjs   # every blob any kept manifest needs, from the live site
 npm run deploy         # optionally: SITE_ORIGIN=https://… npm run deploy (registry packaged for it)
 ```
 

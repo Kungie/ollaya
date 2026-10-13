@@ -2,6 +2,7 @@
 // writes src/generated/registry.ts — the facts behind every model and tag page on the site.
 //
 //   registry/v2/<namespace>/<model>/manifests/<tag>   OCI-style manifests
+//   registry/v2/<namespace>/<model>/manifests/sha256-<hex>   the same manifests kept by digest (not tags; skipped)
 //   registry/blobs/sha256-<hex>                      derived blobs (config, router, decision, …)
 //
 // Weights and tokenizers live on the model authors' Hugging Face repos, referenced by URL in the
@@ -115,6 +116,8 @@ for (const ns of await dirs(join(registry, 'v2'))) {
   for (const model of await dirs(join(registry, 'v2', ns))) {
     const tags = []
     for (const tag of await files(join(registry, 'v2', ns, model, 'manifests'))) {
+      // Manifests kept by digest (scripts/archive-manifests.mjs) are served for pulls, not listed.
+      if (/^sha256-[0-9a-f]{64}$/.test(tag)) continue
       try {
         tags.push(await readTag(ns, model, tag))
       } catch (e) {

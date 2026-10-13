@@ -4,6 +4,10 @@
 //! `sha256-<hex>-partial` file. Per-part progress is saved next to it, so an interrupted pull
 //! resumes where it stopped. Every blob is verified against its sha256 before it is renamed into
 //! place, and the manifest is written last: a model is either fully present or not listed.
+//!
+//! A name with a digest (`laya:en@sha256:<hex>`) fetches `/manifests/sha256:<hex>` instead of the
+//! tag, and the manifest must hash to that digest before any of its blobs is downloaded. It is
+//! then stored under the name's tag, whatever the tag points to in the registry now.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -119,13 +123,27 @@ impl Puller {
         self.http.as_ref().map_err(|e| Error::NoHttps(e.clone()))
     }
 
-    /// Fetch and parse a manifest without storing anything.
+    /// Fetch and parse a manifest without storing anything. A name with a digest fetches the
+    /// manifest by that digest and checks the bytes against it before anything else reads them.
     pub async fn fetch_manifest(&self, name: &ModelName) -> Result<(Manifest, Vec<u8>), Error> {
         let resp = self.http()?.get(name.manifest_url()).send().await?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            return Err(Error::NotFound(name.to_string()));
+            // The registry's 404 page (HTML on a static site) is never read as a manifest.
+            return Err(match name.digest {
+                Some(_) => Error::DigestNotFound(name.to_string()),
+                None => Error::NotFound(name.to_string()),
+            });
         }
         let bytes = resp.error_for_status()?.bytes().await?.to_vec();
+        if let Some(digest) = &name.digest {
+            let got = format!("sha256:{}", sha256_hex(&bytes));
+            if &got != digest {
+                return Err(Error::ManifestMismatch {
+                    name: name.to_string(),
+                    got,
+                });
+            }
+        }
         let manifest: Manifest = serde_json::from_slice(&bytes)
             .map_err(|e| Error::Corrupt(format!("manifest for {name}: {e}")))?;
         for d in manifest.blobs() {

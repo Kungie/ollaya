@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+  "config": {
+    "mediaType": "application/vnd.ollaya.config.v1+json",
+    "digest": "sha256:6094cb840694106a9b7edf467c35a1c0e932cbfa954e32f0a678a4f55d28ee8e",
+    "size": 519,
+    "urls": [
+      "https://ollaya.dev/blobs/sha256-6094cb840694106a9b7edf467c35a1c0e932cbfa954e32f0a678a4f55d28ee8e"
+    ]
+  },
+  "layers": [
+    {
+      "mediaType": "application/vnd.ollaya.weights.gguf",
+      "digest": "sha256:aea433883bc7ed399f2fbd539e53d2eac7caf71a946fe6650995a413979d4a30",
+      "size": 4482402720,
+      "urls": [
+        "https://huggingface.co/alibiserikbay/JevK5-GGUF/resolve/ec67b0bfce5119a8b11a2cdb430bb43e3fa3e82a/jevk5-4b-v0.3-Q8_0.gguf"
+      ],
+      "annotations": {
+        "org.ollaya.quantization": "Q8_0"
+      }
+    },
+    {
+      "mediaType": "application/vnd.ollaya.decision",
+      "digest": "sha256:84abdb80a5d856e666e2546ae5b2f158b1d5ae81448d9d00c9157505c86c4817",
+      "size": 1038,
+      "urls": [
+        "https://ollaya.dev/blobs/sha256-84abdb80a5d856e666e2546ae5b2f158b1d5ae81448d9d00c9157505c86c4817"
+      ]
+    },
+    {
+      "mediaType": "application/vnd.ollaya.calibration",
+      "digest": "sha256:1940514cbbfcb6082ebde8949f55fe2a38ede9a8371cbe2a344e390d83b28b94",
+      "size": 300,
+      "urls": [
+        "https://ollaya.dev/blobs/sha256-1940514cbbfcb6082ebde8949f55fe2a38ede9a8371cbe2a344e390d83b28b94"
+      ]
+    },
+    {
+      "mediaType": "application/vnd.ollaya.license",
+      "digest": "sha256:8e946530c46d5078253321d71a227e5e4a943240ba735c0ff3e30edf23737425",
+      "size": 10458,
+      "urls": [
+        "https://ollaya.dev/blobs/sha256-8e946530c46d5078253321d71a227e5e4a943240ba735c0ff3e30edf23737425"
+      ]
+    }
+  ]
+}

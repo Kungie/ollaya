@@ -34,7 +34,7 @@ order: 3
 
 - **JSON.** Request and response bodies are JSON objects. The body is parsed as JSON whatever its `Content-Type`, so `curl -d` works as is. Requests are at most 8 MiB.
 - **Field names** are `snake_case`. Unknown request fields are ignored; `null` means absent.
-- **Model names** are `[host/][namespace/]model[:tag]`, case-insensitive. A missing tag means `latest`. Responses always use the canonical form, such as `laya:latest`.
+- **Model names** are `[host/][namespace/]model[:tag][@sha256:<hex>]`, case-insensitive. A missing tag means `latest`. Responses always use the canonical form, such as `laya:latest`. A digest pins the name to one manifest, the `digest` that `/api/tags` reports: `laya:en@sha256:<hex>` is `laya:en` only while it holds that manifest, and pulling it fetches that version by digest.
 - **Numbers.** Probabilities, confidences, `score` and `noul` are rounded to 4 decimal places. Durations are integers in nanoseconds; timestamps are RFC 3339 in UTC.
 - **Streaming.** `/api/pull` and `/api/create` stream newline-delimited JSON, one object per line, ending with exactly one `{"status":"success"}` or an error line. Send `"stream": false` for a single response.
 - **Request IDs.** Every response carries `X-Request-Id`, and `/v1/*` responses also `x-typesafe-request-id`. A valid client-sent `X-Request-Id` is echoed.
@@ -396,6 +396,8 @@ The response streams progress, with Ollama's status strings:
 ```
 
 A model only appears in `/api/tags` after `writing manifest`. For a router there is one `success`, at the very end. A name that doesn't parse, a model that isn't in the registry and an unreachable registry are ordinary HTTP errors (`422`, `404`, `502`) before the stream starts, so `curl --fail` works. With `"stream": false` the response is `{"status": "success"}` when done. A second pull of the same name joins the one in flight. Safe to retry.
+
+To pull an exact version, add its manifest digest: `{"model": "laya:en@sha256:<hex>"}`. The manifest is fetched by that digest and checked against it before anything is stored, then stored under `laya:en` even if the tag has moved on since. Without a tag, `laya@sha256:<hex>` is stored under that name. A digest the registry doesn't have is a `404` (`... it has no manifest with that digest`), and a manifest that doesn't match it a `502` `DIGEST_MISMATCH`, with nothing stored. {{SITE_HOST}} keeps every manifest published under a tag.
 
 ## Delete a model
 

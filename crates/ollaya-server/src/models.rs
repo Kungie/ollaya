@@ -73,7 +73,7 @@ pub enum Resolved {
     Model(Box<Loadable>),
     /// A router: the target is chosen per request.
     Router {
-        name: ModelName,
+        name: Box<ModelName>,
         digest: String,
         router: Box<Router>,
         config: Box<ModelConfig>,
@@ -103,7 +103,7 @@ pub fn resolve_entry(store: &Store, entry: Entry) -> Result<Resolved, Error> {
     if let Some(router) = manifest.layer(media::ROUTER) {
         let router = store.read_blob_json(router)?;
         return Ok(Resolved::Router {
-            name,
+            name: Box::new(name),
             digest,
             router: Box::new(router),
             config: Box::new(config),

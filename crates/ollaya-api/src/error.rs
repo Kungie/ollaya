@@ -353,13 +353,28 @@ impl ValidationIssue {
         .with_ctx(json!({"discriminator": "'type'", "tag": tag, "expected_tags": expected}))
     }
 
-    /// A model name that does not parse as `[host/][namespace/]model[:tag]`. The daemon builds
-    /// this from `ollaya-registry`'s parser, which owns the grammar.
+    /// A model name that does not parse as `[host/][namespace/]model[:tag][@sha256:<hex>]`. The
+    /// daemon builds this from `ollaya-registry`'s parser, which owns the grammar.
     pub fn model_name(loc: Vec<Loc>, input: &str) -> Self {
         ValidationIssue::new(
             loc,
             "model_name",
-            format!("invalid model name {input:?}; expected [host/][namespace/]model[:tag]"),
+            format!(
+                "invalid model name {input:?}; expected [host/][namespace/]model[:tag][@sha256:<hex>]"
+            ),
+        )
+    }
+
+    /// A name with a digest (`@sha256:<hex>`) where a model is written (`/api/create`'s `model`,
+    /// `/api/copy`'s `destination`): a digest names a manifest that exists, not one being made.
+    pub fn model_name_with_digest(loc: Vec<Loc>, input: &str) -> Self {
+        ValidationIssue::new(
+            loc,
+            "model_name",
+            format!(
+                "{input:?} has a digest; a model is written under a name without one, \
+                 [host/][namespace/]model[:tag]"
+            ),
         )
     }
 
@@ -533,6 +548,17 @@ impl ErrorBody {
         )
     }
 
+    /// `404 MODEL_NOT_FOUND` from `/api/pull` by digest: the registry has no manifest with that
+    /// digest for the model.
+    pub fn digest_not_in_registry(canonical: &str, registry: &str) -> Self {
+        ErrorBody::new(
+            ErrorCode::ModelNotFound,
+            format!(
+                "model {canonical:?} not found in registry {registry}: it has no manifest with that digest"
+            ),
+        )
+    }
+
     /// `422 TOO_MANY_OPTIONS`.
     pub fn too_many_options(question_id: &str, qtype: &str, options: usize, model: &str) -> Self {
         ErrorBody::with_issues(
@@ -642,6 +668,18 @@ impl ErrorBody {
         ErrorBody::new(
             ErrorCode::DigestMismatch,
             format!("blob {digest} does not match its digest; the download was discarded"),
+        )
+    }
+
+    /// `502 DIGEST_MISMATCH` from `/api/pull` by digest: the registry served a manifest whose
+    /// sha256 is `got`, not the digest in `canonical`.
+    pub fn manifest_mismatch(canonical: &str, got: &str) -> Self {
+        ErrorBody::new(
+            ErrorCode::DigestMismatch,
+            format!(
+                "the registry served manifest {got} for {canonical:?}, not the one its digest \
+                 names; nothing was stored"
+            ),
         )
     }
 

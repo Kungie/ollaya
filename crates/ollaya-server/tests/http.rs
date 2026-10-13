@@ -949,17 +949,22 @@ async fn queue_bound_and_cancellation() {
     d.stop().await;
 }
 
-/// A static registry (the website's `/v2/...` files) on a random port.
+/// A static registry (the website's `/v2/...` files) on a random port, with the website's
+/// rewrite for manifests by digest (`site/public/_redirects`): `.../manifests/sha256:<hex>` is the
+/// file `sha256-<hex>`. Missing files are an HTML 404 page, as there.
 async fn registry(dir: PathBuf) -> String {
     let app = axum::Router::new().route(
         "/{*path}",
         axum::routing::get(
             move |axum::extract::Path(path): axum::extract::Path<String>| {
-                let file = dir.join(path);
+                let file = dir.join(path.replacen("/manifests/sha256:", "/manifests/sha256-", 1));
                 async move {
                     match std::fs::read(&file) {
                         Ok(b) => (axum::http::StatusCode::OK, b),
-                        Err(_) => (axum::http::StatusCode::NOT_FOUND, Vec::new()),
+                        Err(_) => (
+                            axum::http::StatusCode::NOT_FOUND,
+                            b"<!DOCTYPE html><title>Page not found</title>".to_vec(),
+                        ),
                     }
                 }
             },
@@ -972,6 +977,12 @@ async fn registry(dir: PathBuf) -> String {
 }
 
 fn publish(root: &Path, base: &str, name: &str) {
+    publish_tag(root, base, name, "latest", 7);
+}
+
+/// Publish `name:tag`, whose graph is 4 KiB of `graph`, and keep its manifest by digest as
+/// `package.py` does (`manifests/sha256-<hex>`). Returns the digest.
+fn publish_tag(root: &Path, base: &str, name: &str, tag: &str, graph: u8) -> String {
     let blobs = root.join("blobs");
     std::fs::create_dir_all(&blobs).unwrap();
     let put = |media_type: &str, bytes: &[u8], precision: Option<&str>| {
@@ -996,7 +1007,7 @@ fn publish(root: &Path, base: &str, name: &str) {
             None,
         ),
         layers: vec![
-            put(media::GRAPH_ONNX, &[7u8; 4096], Some("fp32")),
+            put(media::GRAPH_ONNX, &[graph; 4096], Some("fp32")),
             put(media::TOKENIZER, b"{}", None),
             put(
                 media::DECISION,
@@ -1007,7 +1018,11 @@ fn publish(root: &Path, base: &str, name: &str) {
     };
     let dir = root.join(format!("v2/library/{name}/manifests"));
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("latest"), serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let bytes = serde_json::to_vec(&manifest).unwrap();
+    std::fs::write(dir.join(tag), &bytes).unwrap();
+    let hex = sha256_hex(&bytes);
+    std::fs::write(dir.join(format!("sha256-{hex}")), &bytes).unwrap();
+    format!("sha256:{hex}")
 }
 
 async fn pull_streams_ndjson() {
@@ -1095,6 +1110,146 @@ async fn pull_streams_ndjson() {
         .await
         .unwrap();
     assert!(r.model.ends_with("/library/tiny:latest"));
+    d.stop().await;
+}
+
+async fn pull_by_digest() {
+    let remote = tempfile::tempdir().unwrap();
+    let base = registry(remote.path().to_owned()).await;
+    let d1 = publish_tag(remote.path(), &base, "tiny", "latest", 7);
+    let d2 = publish_tag(remote.path(), &base, "tiny", "latest", 8); // the tag moves
+    let d = Daemon::start(|_| {}, |_| {}).await;
+    let name = format!("{base}/library/tiny");
+    let latest = |m: &str| format!("{name}:latest@{m}");
+    let local_digest = |tags: &ollaya_api::TagsResponse, suffix: &str| {
+        tags.models
+            .iter()
+            .find(|m| m.name.ends_with(suffix))
+            .map(|m| format!("sha256:{}", m.digest))
+    };
+
+    // A digest the registry doesn't have: 404 before the stream starts, saying so.
+    let unknown = format!("sha256:{}", "0".repeat(64));
+    let (status, _, body) = post_raw(
+        &d.url("/api/pull"),
+        json!({"model": latest(&unknown)}).to_string(),
+    )
+    .await;
+    assert_eq!(status, 404, "{body}");
+    assert_eq!(body["code"], "MODEL_NOT_FOUND");
+    let error = body["error"].as_str().unwrap();
+    assert!(
+        error.contains(&format!("/library/tiny:latest@{unknown}\""))
+            && error.ends_with("it has no manifest with that digest"),
+        "{body}"
+    );
+
+    // The old version, by digest, under the tag that has moved on since.
+    let mut seen = Vec::new();
+    d.client
+        .pull(&PullRequest::new(latest(&d1)), |p| {
+            seen.push(p.status.clone())
+        })
+        .await
+        .unwrap();
+    assert_eq!(seen.first().map(String::as_str), Some("pulling manifest"));
+    assert_eq!(seen.last().map(String::as_str), Some("success"));
+    let tags = d.client.tags().await.unwrap();
+    assert_eq!(
+        local_digest(&tags, "/library/tiny:latest"),
+        Some(d1.clone())
+    );
+
+    // A pinned name answers only while the tag holds that manifest.
+    let r = d
+        .client
+        .decide(&DecideRequest::new(
+            latest(&d1),
+            json!("hello"),
+            serde_json::from_value(triage()).ok(),
+        ))
+        .await
+        .unwrap();
+    assert!(
+        r.model.ends_with(&format!("/library/tiny:latest@{d1}")),
+        "{}",
+        r.model
+    );
+    let (status, body) = api_err(
+        d.client
+            .decide(&DecideRequest::new(
+                latest(&d2),
+                json!("hello"),
+                serde_json::from_value(triage()).ok(),
+            ))
+            .await
+            .unwrap_err(),
+    );
+    assert_eq!((status, body.code), (404, ErrorCode::ModelNotFound));
+
+    // By digest alone: its own name, next to the tag.
+    let r = http()
+        .post(d.url("/api/pull"))
+        .body(json!({"model": format!("{name}@{d2}"), "stream": false}).to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.json::<Value>().await.unwrap(),
+        json!({"status": "success"})
+    );
+    let tags = d.client.tags().await.unwrap();
+    assert_eq!(
+        local_digest(&tags, &format!("/library/tiny@{d2}")),
+        Some(d2.clone())
+    );
+    assert_eq!(
+        local_digest(&tags, "/library/tiny:latest"),
+        Some(d1.clone())
+    );
+
+    // A digest can't name a model being written.
+    for (path, body, field) in [
+        (
+            "/api/copy",
+            json!({"source": latest(&d1), "destination": format!("{name}:copy@{d1}")}),
+            "destination",
+        ),
+        (
+            "/api/create",
+            json!({"model": format!("{name}:mine@{d1}"), "from": latest(&d1)}),
+            "model",
+        ),
+    ] {
+        let (status, _, body) = post_raw(&d.url(path), body.to_string()).await;
+        assert_eq!(status, 422, "{path}: {body}");
+        assert_eq!(body["detail"][0]["loc"], json!(["body", field]), "{body}");
+        assert_eq!(body["detail"][0]["type"], "model_name", "{body}");
+    }
+
+    // A registry that serves another manifest under d1's digest: 502, and nothing changes.
+    let dir = remote.path().join("v2/library/tiny/manifests");
+    std::fs::copy(
+        dir.join(format!("sha256-{}", &d2[7..])),
+        dir.join(format!("sha256-{}", &d1[7..])),
+    )
+    .unwrap();
+    let (status, _, body) = post_raw(
+        &d.url("/api/pull"),
+        json!({"model": latest(&d1)}).to_string(),
+    )
+    .await;
+    assert_eq!(status, 502, "{body}");
+    assert_eq!(body["code"], "DIGEST_MISMATCH");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("nothing was stored"),
+        "{body}"
+    );
+    let tags = d.client.tags().await.unwrap();
+    assert_eq!(local_digest(&tags, "/library/tiny:latest"), Some(d1));
     d.stop().await;
 }
 
@@ -1554,6 +1709,7 @@ fn main() {
         auth_origin_and_host,
         queue_bound_and_cancellation,
         pull_streams_ndjson,
+        pull_by_digest,
         create_copy_delete,
         show_modelfile_keeps_a_custom_license,
         create_rejects_an_unavailable_precision,

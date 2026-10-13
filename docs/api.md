@@ -103,18 +103,29 @@ Any other path returns `404 NOT_FOUND`. A known path with the wrong method retur
 
 ## 3. Model names and resolution
 
-**Grammar.** `[host/][namespace/]model[:tag]`, as in Ollama.
+**Grammar.** `[host/][namespace/]model[:tag][@sha256:<hex>]`, as in Ollama.
 
 | Part | Rule | Default |
 |---|---|---|
 | `host` | Registry host, optionally with `http://` or `https://` (development registries) | `OLLAYA_REGISTRY`, else `ollaya.dev` |
 | `namespace` | 1–80 chars, `[A-Za-z0-9_][A-Za-z0-9_.-]*` | `library` |
 | `model` | 1–80 chars, `[A-Za-z0-9_][A-Za-z0-9_.-]*` | – |
-| `tag` | 1–80 chars, `[A-Za-z0-9_][A-Za-z0-9_.-]*` | `latest` |
+| `tag` | 1–80 chars, `[A-Za-z0-9_][A-Za-z0-9_.-]*` | `latest`; with a digest and no tag, `sha256-<hex>` |
+| `digest` | `sha256:` and 64 hex digits: the sha256 of the manifest's bytes, the `digest` that `/api/tags` and `/api/ps` report | none |
+
+**Digests.** A digest pins a name to one manifest; the tag says where it is stored.
+`laya:en@sha256:<hex>` is `laya:en` holding exactly that manifest: `/api/pull` fetches it by digest
+and stores it under `en` ([§7.6](#76-post-apipull)), and every other endpoint finds the model only
+while `en` holds that manifest (`404 MODEL_NOT_FOUND` otherwise). Without a tag,
+`laya@sha256:<hex>` is stored under the tag `sha256-<hex>`; `laya:sha256-<hex>` is the same name,
+and its canonical form is `laya@sha256:<hex>`. A name that a model is written under (`/api/create`
+`model`, `/api/copy` `destination`) can't have a digest: `422 INVALID_REQUEST` with a `model_name`
+issue.
 
 **Normalization.** Names are trimmed and compared case-insensitively. The **canonical name** is the
 shortest form, with the tag always shown: `laya` → `laya:latest`, `Laya:EN` → `laya:en`,
-`acme/triage` → `acme/triage:latest`, `localhost:8080/library/laya:en` stays as is. Every response
+`acme/triage` → `acme/triage:latest`, `localhost:8080/library/laya:en` stays as is. A digest
+follows the tag, in lowercase: `laya:en@sha256:<hex>`. Every response
 field that names a model (`model`, `name`, `routing.*`, `parent_model`) uses the canonical name.
 A string that does not parse is `422 INVALID_REQUEST` with a `model_name` issue on the field.
 
@@ -885,6 +896,15 @@ Errors: `404 MODEL_NOT_FOUND`, `422 INVALID_REQUEST`, `500 STORAGE_ERROR`. Safe 
 Downloads a model from its registry into the local store. Pulling a **router also pulls every model
 it routes to**, because a router cannot answer without them.
 
+**By digest.** With a digest in the name ([§3](#3-model-names-and-resolution)), the manifest is
+fetched from `/v2/<namespace>/<model>/manifests/sha256:<hex>` instead of the tag, and its sha256
+must equal the digest before its JSON is read or any blob is downloaded. It is then stored under
+the name's tag (`laya:en@sha256:<hex>` replaces the local `laya:en`), or under `sha256-<hex>` when
+the name has no tag, whatever the tag points to in the registry now. The tag is not checked
+against the registry. A router pinned by digest still pulls its targets by their tags. ollaya.dev
+serves by digest every manifest published under a tag (from the release that added this, and the
+older ones whose files it still had; [ADR 0006](decisions/0006-manifest-retention.md)).
+
 | Request field | Type | Required | Default | Rules |
 |---|---|---|---|---|
 | `model` | string | yes | – | [§3](#3-model-names-and-resolution) |
@@ -922,7 +942,11 @@ before sending the response head. So a name that does not parse (`422`), a model
 registry (`404 MODEL_NOT_FOUND`: `model "laya:xl" not found in registry ollaya.dev`) and an
 unreachable registry (`502 REGISTRY_ERROR`) have real status codes, and `curl --fail` works. Ollama
 instead streams these as error lines after `200`. Status codes matter to scripts, and Ollama
-clients handle both forms.
+clients handle both forms. By digest, the same goes for a digest the registry doesn't have
+(`404 MODEL_NOT_FOUND`: `model "laya:en@sha256:<hex>" not found in registry ollaya.dev: it has no
+manifest with that digest`) and for a manifest that doesn't match it (`502 DIGEST_MISMATCH`: `the
+registry served manifest sha256:<other> for "laya:en@sha256:<hex>", not the one its digest names;
+nothing was stored`).
 
 **Errors after the stream starts** are an error line ([§4.3](#43-errors-inside-a-stream)):
 `DIGEST_MISMATCH`, `REGISTRY_ERROR`, `STORAGE_ERROR`.
@@ -956,6 +980,11 @@ curl http://localhost:11435/api/pull -d '{"model": "laya:en"}'
 curl http://localhost:11435/api/pull -d '{"model": "laya:en", "stream": false}'
 ```
 
+<!-- curl: PullRequest -->
+```shell
+curl http://localhost:11435/api/pull -d '{"model": "laya:en@sha256:c305a9276531a47000bf93559d2c94f1ed6cbb67055c9151084682dad7655e9d", "stream": false}'
+```
+
 <!-- json: ProgressResponse -->
 ```json
 {"status": "success"}
@@ -963,10 +992,11 @@ curl http://localhost:11435/api/pull -d '{"model": "laya:en", "stream": false}'
 
 **Idempotency.** A pull converges on one state: the model at the registry's current manifest is
 present locally. Repeating it downloads only missing blobs, and it picks up a moved tag, which is
-intended. **Safe to retry.** A **concurrent duplicate** pull (same canonical name) **joins** the
-pull in flight: the second caller gets every later line and the same terminal line. A pull of a name
-that `/api/create` is writing gets `409 OPERATION_IN_PROGRESS`. See
-[§11](#11-idempotency-and-retries).
+intended. A pull by digest converges on that manifest instead, and never moves. **Safe to retry.**
+A **concurrent duplicate** pull (same canonical name) **joins** the pull in flight: the second
+caller gets every later line and the same terminal line. A pull that would write the same tag with
+another digest (or none), and a pull of a name that `/api/create` is writing, get
+`409 OPERATION_IN_PROGRESS`. See [§11](#11-idempotency-and-retries).
 
 ### 7.7 `DELETE /api/delete`
 
@@ -1446,19 +1476,21 @@ where the skill's key machinery is needed, and it does not arise here.
 | Endpoint | Effect idempotent | Repeat response | In-flight duplicate | Safe to retry |
 |---|---|---|---|---|
 | `POST /api/decide`, `/v1/*` | yes (no stored effect; residency converges) | same shape; numbers equal for the same model and precision | runs again | yes |
-| `POST /api/pull` | yes (converges on the registry's current manifest) | `success` | same name: **joins** the in-flight pull. During a create of that name: `409` | yes |
+| `POST /api/pull` | yes (converges on the registry's current manifest, or the one its digest names) | `success` | same name: **joins** the in-flight pull. The same tag with another digest, or a create of that name: `409` | yes |
 | `DELETE /api/delete` | yes | `404 MODEL_NOT_FOUND`; treat as success on retry | `409` while a pull or create writes it | yes, with that rule |
 | `POST /api/copy` | yes (last write wins) | `200` | `409` if a pull or create writes the destination | yes |
 | `POST /api/create` | yes (content-addressed) | same manifest | `409 OPERATION_IN_PROGRESS` | yes |
 
 **How the guards are built** (the skill's "claim atomically" rule, applied to the in-flight table):
 
-- **One table.** The daemon keeps one in-flight table keyed by **canonical model name**. A pull or
-  create claims its name with a single insert-if-absent under one lock. There is no separate check
+- **One table.** The daemon keeps one in-flight table keyed by the **manifest file** a name writes
+  (the canonical name without its digest). A pull or create claims it with a single
+  insert-if-absent under one lock. There is no separate check
   followed by an act, so no TOCTOU window.
-- **Joining is guarded by payload.** A pull joins only a pull: its payload is the name alone, so
-  the intent is identical. A create of the same name has a different payload and gets `409`, instead
-  of silently receiving another request's result.
+- **Joining is guarded by payload.** A pull joins only a pull of the same canonical name, digest
+  included: its payload is the name alone, so the intent is identical. A pull of the same tag with
+  another digest, or a create of the same name, has a different payload and gets `409`, instead of
+  silently receiving another request's result.
 - **Shared blobs.** A blob already in the store is never downloaded again, so models that share
   weights (`laya:en` and `laya:en-fp32`) download them once.
 - **Crash safety.** Blobs are written to a temporary file, verified against their sha256, then

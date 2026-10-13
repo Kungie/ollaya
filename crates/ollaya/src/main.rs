@@ -42,7 +42,14 @@ enum Command {
     /// Run a model: answer questions about a state, or start a REPL
     Run(run::RunArgs),
     /// Pull a model from a registry
+    ///
+    /// With a digest, the manifest is fetched by that digest and checked against it before
+    /// anything is stored: `laya:en@sha256:<hex>` stores that exact version under `laya:en`
+    /// even after the tag has moved, and `laya@sha256:<hex>` stores it as `laya@sha256:<hex>`
+    /// (the tag `sha256-<hex>`). A registry serves the manifests it keeps by digest; the public
+    /// one keeps every manifest published under a tag.
     Pull {
+        /// [host/][namespace/]model[:tag][@sha256:<hex>]
         model: String,
         /// Accepted for Ollama compatibility; use an http:// host in the name for dev registries
         #[arg(long)]
@@ -424,6 +431,11 @@ mod tests {
         assert!(matches!(
             parse(&["pull", "laya"]).command,
             Some(Command::Pull { .. })
+        ));
+        let pinned = format!("laya:en@sha256:{}", "a".repeat(64));
+        assert!(matches!(
+            parse(&["pull", &pinned]).command,
+            Some(Command::Pull { model, .. }) if model == pinned
         ));
         assert!(
             matches!(parse(&["rm", "a", "b"]).command, Some(Command::Rm { models }) if models.len() == 2)

@@ -5,7 +5,12 @@
 Writes, under `registry/` at the repository root (copied into the website at build time):
 
     registry/v2/<namespace>/<model>/manifests/<tag>   Docker v2 manifests
+    registry/v2/<namespace>/<model>/manifests/sha256-<hex>   the same manifest, kept by digest
     registry/blobs/sha256-<hex>                       files Ollaya derives (graphs, configs)
+
+Every manifest written under a tag is also kept under its sha256 and never deleted, so that
+`ollaya pull <name>@sha256:<hex>` can fetch it after the tag has moved (the site serves it at
+`/v2/<namespace>/<model>/manifests/sha256:<hex>`; docs/decisions/0006-manifest-retention.md).
 
 Weights and tokenizers are never copied. Their manifest layers point at the author's Hugging
 Face repository, pinned to a commit, and carry the file's sha256 (the Git LFS object id), which
@@ -124,12 +129,19 @@ def arch_layers(v, blobs, weights_path):
 
 
 def write_manifest(namespace, model, tag, config, layers):
+    """Write the tag's manifest, and keep the same bytes as `sha256-<hex>`: the manifest by digest,
+    which stays after the tag moves."""
+    if tag.startswith("sha256-"):
+        raise SystemExit("%s/%s: tag %r: tags starting with sha256- name manifests by digest"
+                         % (namespace, model, tag))
     manifest = {"schemaVersion": 2, "mediaType": MANIFEST_V2, "config": config, "layers": layers}
+    body = json.dumps(manifest, indent=2).encode("utf-8")
     d = os.path.join(REGISTRY, "v2", namespace, model, "manifests")
     os.makedirs(d, exist_ok=True)
-    with open(os.path.join(d, tag), "w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2)
-    print("  %s/%s:%s  %d layers" % (namespace, model, tag, len(layers)))
+    for name in (tag, "sha256-" + sha256(body)):
+        with open(os.path.join(d, name), "wb") as f:
+            f.write(body)
+    print("  %s/%s:%s  %d layers  sha256:%s" % (namespace, model, tag, len(layers), sha256(body)))
 
 
 def graph_bytes(export_dir, checkpoint, prefix, weights_oid):

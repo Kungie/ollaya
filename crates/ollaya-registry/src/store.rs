@@ -6,6 +6,10 @@
 //! ```
 //!
 //! Blobs are shared between models and removed only when no manifest references them.
+//!
+//! A name with a digest (`laya:en@sha256:<hex>`) is the file of its tag, but only while that file
+//! holds the manifest the digest names: reads find nothing otherwise, and a write of any other
+//! manifest fails.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -15,7 +19,7 @@ use sha2::{Digest, Sha256};
 
 use crate::Error;
 use crate::manifest::{Descriptor, Manifest};
-use crate::name::{DEFAULT_NAMESPACE, ModelName};
+use crate::name::{DEFAULT_NAMESPACE, ModelName, tag_digest};
 
 #[derive(Debug, Clone)]
 pub struct Store {
@@ -116,13 +120,13 @@ impl Store {
             .join(&name.tag)
     }
 
+    /// The model's manifest, or `None` when it is not here. A name with a digest finds only
+    /// that manifest: another one under its tag counts as absent.
     pub fn read_manifest(&self, name: &ModelName) -> Result<Option<Entry>, Error> {
-        let path = self.manifest_path(name);
-        let bytes = match std::fs::read(&path) {
-            Ok(b) => b,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(e.into()),
+        let Some(bytes) = self.read_manifest_bytes(name)? else {
+            return Ok(None);
         };
+        let path = self.manifest_path(name);
         let manifest = serde_json::from_slice(&bytes)
             .map_err(|e| Error::Corrupt(format!("{}: {e}", path.display())))?;
         Ok(Some(Entry {
@@ -133,7 +137,30 @@ impl Store {
         }))
     }
 
+    /// The manifest file's bytes, on the same terms as [`Store::read_manifest`].
+    fn read_manifest_bytes(&self, name: &ModelName) -> Result<Option<Vec<u8>>, Error> {
+        let bytes = match std::fs::read(self.manifest_path(name)) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        match &name.digest {
+            Some(d) if *d != format!("sha256:{}", sha256_hex(&bytes)) => Ok(None),
+            _ => Ok(Some(bytes)),
+        }
+    }
+
+    /// Store a manifest under `name`'s tag. With a digest, only the manifest it names.
     pub fn write_manifest(&self, name: &ModelName, bytes: &[u8]) -> Result<(), Error> {
+        if let Some(d) = &name.digest {
+            let got = format!("sha256:{}", sha256_hex(bytes));
+            if got != *d {
+                return Err(Error::ManifestMismatch {
+                    name: name.to_string(),
+                    got,
+                });
+            }
+        }
         let path = self.manifest_path(name);
         std::fs::create_dir_all(path.parent().expect("manifest path has a parent"))?;
         write_atomic(&path, bytes)
@@ -151,11 +178,14 @@ impl Store {
                         if !tag.is_file() {
                             continue;
                         }
+                        let tag = file_name(&tag);
                         let name = ModelName {
                             host: file_name(&host).replace('_', ":"),
                             namespace: file_name(&ns),
                             model: file_name(&model),
-                            tag: file_name(&tag),
+                            // A manifest pulled by digest alone lists as `model@sha256:<hex>`.
+                            digest: tag_digest(&tag),
+                            tag,
                         };
                         let name = normalise_host(name);
                         if let Some(entry) = self.read_manifest(&name)? {
@@ -169,8 +199,12 @@ impl Store {
         Ok(out)
     }
 
-    /// Remove a model's manifest, then any blobs nothing references anymore.
+    /// Remove a model's manifest, then any blobs nothing references anymore. A name with a
+    /// digest removes its tag only while the tag holds that manifest.
     pub fn remove(&self, name: &ModelName) -> Result<bool, Error> {
+        if name.digest.is_some() && self.read_manifest_bytes(name)?.is_none() {
+            return Ok(false);
+        }
         let path = self.manifest_path(name);
         match std::fs::remove_file(&path) {
             Ok(()) => {}
@@ -224,8 +258,11 @@ impl Store {
     }
 
     pub fn copy(&self, src: &ModelName, dst: &ModelName) -> Result<(), Error> {
-        let bytes =
-            std::fs::read(self.manifest_path(src)).map_err(|_| Error::NotFound(src.to_string()))?;
+        let bytes = self
+            .read_manifest_bytes(src)
+            .ok()
+            .flatten()
+            .ok_or_else(|| Error::NotFound(src.to_string()))?;
         self.write_manifest(dst, &bytes)
     }
 
@@ -349,6 +386,59 @@ mod tests {
         assert!(!dir.path().join("manifests/old.example").exists());
         // Nothing left to move.
         assert_eq!(store.migrate_host("old.example", "new.example").unwrap(), 0);
+    }
+
+    #[test]
+    fn a_name_with_a_digest_reads_and_writes_only_that_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let (v1, v2) = (manifest(&store, b"one"), manifest(&store, b"two"));
+        let d1 = format!("sha256:{}", sha256_hex(&v1));
+        let d2 = format!("sha256:{}", sha256_hex(&v2));
+        let en = ModelName::parse("laya:en").unwrap();
+        let pinned = |d: &str| ModelName::parse(&format!("laya:en@{d}")).unwrap();
+        store.write_manifest(&en, &v1).unwrap();
+
+        assert_eq!(
+            store.read_manifest(&pinned(&d1)).unwrap().unwrap().digest,
+            d1
+        );
+        assert!(store.read_manifest(&pinned(&d2)).unwrap().is_none());
+        // Writing v1 under a name that pins v2 fails and leaves v1.
+        let err = store.write_manifest(&pinned(&d2), &v1).unwrap_err();
+        assert!(matches!(err, Error::ManifestMismatch { .. }), "{err}");
+        assert!(store.read_manifest(&pinned(&d1)).unwrap().is_some());
+        // Copying or removing by the wrong digest finds nothing.
+        let mine = ModelName::parse("mine").unwrap();
+        assert!(matches!(
+            store.copy(&pinned(&d2), &mine),
+            Err(Error::NotFound(_))
+        ));
+        assert!(!store.remove(&pinned(&d2)).unwrap());
+        store.write_manifest(&pinned(&d2), &v2).unwrap();
+        assert_eq!(store.read_manifest(&en).unwrap().unwrap().digest, d2);
+
+        // Stored by digest alone, it lists under its digest.
+        let by_digest = ModelName::parse(&format!("laya@{d1}")).unwrap();
+        store.write_manifest(&by_digest, &v1).unwrap();
+        assert!(
+            dir.path()
+                .join(format!(
+                    "manifests/ollaya.dev/library/laya/sha256-{}",
+                    &d1[7..]
+                ))
+                .is_file()
+        );
+        let names: Vec<_> = store
+            .list()
+            .unwrap()
+            .into_iter()
+            .map(|e| e.name.to_string())
+            .collect();
+        assert_eq!(names, ["laya:en".to_owned(), format!("laya@{d1}")]);
+        assert!(store.remove(&pinned(&d2)).unwrap());
+        assert!(store.remove(&by_digest).unwrap());
+        assert!(store.list().unwrap().is_empty());
     }
 
     #[test]

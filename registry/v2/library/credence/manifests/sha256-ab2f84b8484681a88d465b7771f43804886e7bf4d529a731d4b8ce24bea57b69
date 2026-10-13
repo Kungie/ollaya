@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+  "config": {
+    "mediaType": "application/vnd.ollaya.config.v1+json",
+    "digest": "sha256:b7f38f4a26c43dd5937c45cb69b44695d44a05305ba27a47c7c8e49fa960627f",
+    "size": 527,
+    "urls": [
+      "https://ollaya.dev/blobs/sha256-b7f38f4a26c43dd5937c45cb69b44695d44a05305ba27a47c7c8e49fa960627f"
+    ]
+  },
+  "layers": [
+    {
+      "mediaType": "application/vnd.ollaya.weights.gguf",
+      "digest": "sha256:c80a2320a02e79ed77a1b49b7e8a2f55a1ea1d295dbd791aebded6b68bb465e0",
+      "size": 8718469216,
+      "urls": [
+        "https://huggingface.co/Txoka/Credence-v1-Gemma4-E4B/resolve/7d5ffc84145f34a3a76f7074e8c70bf1c1efce56/accuracy/model-Q8_0.gguf"
+      ],
+      "annotations": {
+        "org.ollaya.quantization": "Q8_0"
+      }
+    },
+    {
+      "mediaType": "application/vnd.ollaya.decision",
+      "digest": "sha256:da8c875409d8d8a3c250690d770e28c0733905a1fc46a1f0d6a12425928f1af1",
+      "size": 2072,
+      "urls": [
+        "https://ollaya.dev/blobs/sha256-da8c875409d8d8a3c250690d770e28c0733905a1fc46a1f0d6a12425928f1af1"
+      ]
+    },
+    {
+      "mediaType": "application/vnd.ollaya.calibration",
+      "digest": "sha256:bea23d6cdc7e1ef8eb9a163d880bc5ecedf238362de7b2ea21314f17fe022f2e",
+      "size": 191,
+      "urls": [
+        "https://ollaya.dev/blobs/sha256-bea23d6cdc7e1ef8eb9a163d880bc5ecedf238362de7b2ea21314f17fe022f2e"
+      ]
+    },
+    {
+      "mediaType": "application/vnd.ollaya.license",
+      "digest": "sha256:a5aa25916b909d9ffa8a4db664715773e41a57f4dbcff00cea4b08db1f60408e",
+      "size": 10880,
+      "urls": [
+        "https://ollaya.dev/blobs/sha256-a5aa25916b909d9ffa8a4db664715773e41a57f4dbcff00cea4b08db1f60408e"
+      ]
+    }
+  ]
+}

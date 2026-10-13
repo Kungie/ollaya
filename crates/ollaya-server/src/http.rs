@@ -195,6 +195,11 @@ pub fn error_body(e: &Error, pulling: bool) -> ErrorBody {
                 ErrorBody::not_in_registry(n, &host)
             }
             R::NotFound(n) => ErrorBody::model_not_found(n),
+            R::DigestNotFound(n) => {
+                let host = ModelName::parse(n).map_or_else(|_| n.clone(), |m| m.host);
+                ErrorBody::digest_not_in_registry(n, &host)
+            }
+            R::ManifestMismatch { name, got } => ErrorBody::manifest_mismatch(name, got),
             R::DigestMismatch { expected, .. } => ErrorBody::digest_mismatch(expected),
             R::Unsupported(m) => ErrorBody::new(ErrorCode::UnsupportedModel, m.clone()),
             R::Stalled(_) | R::Http(_) => ErrorBody::new(ErrorCode::RegistryError, r.to_string()),
@@ -206,6 +211,21 @@ pub fn error_body(e: &Error, pulling: bool) -> ErrorBody {
 
 fn api_error(e: &Error) -> ApiError {
     error_body(e, false).into()
+}
+
+/// The name a model is written under: as [`names`], without a digest.
+fn written_name(field: &str, value: &str) -> ApiResult<ModelName> {
+    let [name] = names([(field, value)])?;
+    if name.digest.is_some() {
+        return Err(
+            ErrorBody::invalid_request(vec![ValidationIssue::model_name_with_digest(
+                body_loc(&[field]),
+                value,
+            )])
+            .into(),
+        );
+    }
+    Ok(name)
 }
 
 /// Parse `name` fields; a bad one is a `model_name` issue on that field.
@@ -338,6 +358,7 @@ async fn delete_model(State(s): State<Arc<AppState>>, body: Body) -> ApiResult<S
 async fn copy(State(s): State<Arc<AppState>>, body: Body) -> ApiResult<StatusCode> {
     let req = parse(body, validate::copy_request).await?;
     names([("source", &req.source), ("destination", &req.destination)])?;
+    written_name("destination", &req.destination)?;
     s.ollaya
         .copy(&req.source, &req.destination)
         .map_err(|e| api_error(&e))?;
@@ -491,6 +512,7 @@ async fn pull(State(s): State<Arc<AppState>>, body: Body) -> ApiResult<Response>
 async fn create(State(s): State<Arc<AppState>>, body: Body) -> ApiResult<Response> {
     let req = parse(body, validate::create_request).await?;
     names([("model", &req.model), ("from", &req.from)])?;
+    written_name("model", &req.model)?;
     let spec = CreateSpec {
         from: req.from.clone(),
         questions: req

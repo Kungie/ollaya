@@ -136,7 +136,9 @@ await writeFile(join(dist, 'install.ps1'), await readFile(join(root, '..', 'scri
 
 // The static model registry (../registry, written by convert/ollaya_convert/package.py): manifests
 // under /v2/ and derived blobs under /blobs/. Manifests carry absolute blob URLs, so they must
-// have been packaged for the origin this site is built for.
+// have been packaged for the origin this site is built for. The manifests include every one ever
+// published under a tag, kept by digest (manifests/sha256-<hex>; docs/decisions/0006-manifest-retention.md),
+// so their blobs must all be here too: a deploy never drops what an older manifest needs.
 const registry = process.env.OLLAYA_REGISTRY_DIR ? resolve(process.env.OLLAYA_REGISTRY_DIR) : join(root, '..', 'registry')
 let registryFiles = 0
 if (await stat(registry).catch(() => null)) {
