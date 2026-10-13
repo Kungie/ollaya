@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+  "config": {
+    "mediaType": "application/vnd.ollaya.config.v1+json",
+    "digest": "sha256:dc283d8317f771b767f2971d088bf933f200fd8e5fb7373adbce6c323d396db1",
+    "size": 418,
+    "urls": [
+      "https://ollaya.dev/blobs/sha256-dc283d8317f771b767f2971d088bf933f200fd8e5fb7373adbce6c323d396db1"
+    ]
+  },
+  "layers": [
+    {
+      "mediaType": "application/vnd.ollaya.weights.gguf",
+      "digest": "sha256:2f0942d5a5f64cf69c3356d2be439b71644b1f0eb3a580912a5a0179eeaba77d",
+      "size": 2874781280,
+      "urls": [
+        "https://huggingface.co/LiquidAI/d1-3B-GGUF/resolve/bb1e436ea78eb96a3f1acb6da865f70c2fbeb563/d1-3B-Q8_0.gguf"
+      ],
+      "annotations": {
+        "org.ollaya.quantization": "Q8_0"
+      }
+    },
+    {
+      "mediaType": "application/vnd.ollaya.decision",
+      "digest": "sha256:935e788173f05de017d733346def6fb2f731d7ab91a6003a33a462b024472d8d",
+      "size": 429,
+      "urls": [
+        "https://ollaya.dev/blobs/sha256-935e788173f05de017d733346def6fb2f731d7ab91a6003a33a462b024472d8d"
+      ]
+    },
+    {
+      "mediaType": "application/vnd.ollaya.calibration",
+      "digest": "sha256:3d1e124d4050e3c65d034fde4b58dfa80ba2bd256fab6cc518bcc0b315afd319",
+      "size": 53,
+      "urls": [
+        "https://ollaya.dev/blobs/sha256-3d1e124d4050e3c65d034fde4b58dfa80ba2bd256fab6cc518bcc0b315afd319"
+      ]
+    },
+    {
+      "mediaType": "application/vnd.ollaya.license",
+      "digest": "sha256:5113aebcd7bc811cb9a38e6f81abb32f4f7c12bd6aa997a94c3cce396a8f5416",
+      "size": 10635,
+      "urls": [
+        "https://ollaya.dev/blobs/sha256-5113aebcd7bc811cb9a38e6f81abb32f4f7c12bd6aa997a94c3cce396a8f5416"
+      ]
+    },
+    {
+      "mediaType": "application/vnd.ollaya.projector.gguf",
+      "digest": "sha256:2505920ce464b7c54acd8b7b74a931c0c671f06d0c8833760b2fbceeb253e92a",
+      "size": 583109728,
+      "urls": [
+        "https://huggingface.co/LiquidAI/d1-3B-GGUF/resolve/bb1e436ea78eb96a3f1acb6da865f70c2fbeb563/mmproj-d1-3B-Q8_0.gguf"
+      ]
+    }
+  ]
+}
