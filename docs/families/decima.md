@@ -137,16 +137,19 @@ pyke's 1.28.0, linked statically; on CUDA it is Microsoft's 1.28.2 from the CUDA
 | Model | Device | Questions | Rows | Decisions | Scores max | Probabilities max |
 |---|---|---|---|---|---|---|
 | agent 2.2 | x86-64 CPU | 591 | 2,958 identical | 591/591 | 2.2e-5 | 5.4e-6 |
+| agent 2.2 | CUDA, RTX 4090 | 591 | 2,958 identical | 591/591 | 2.2e-5 | 4.2e-6 |
 | agent 2.2 | CUDA, RTX 5090 | 591 | 2,958 identical | 591/591 | 1.3e-5 | 2.4e-6 |
 
-The ordinal projections are within 1.4e-4 (CPU) and 2.9e-5 (CUDA). The RTX 4090 run is still to do.
+The ordinal projections are within 1.4e-4 (CPU), 5.7e-5 (RTX 4090) and 2.9e-5 (RTX 5090).
 
 **The older models on this runtime (2026-10-13).** On their 0.11.0 goldens (`v1.1.1`, below) the rows and numbers
 are those of 0.11.0: small 1.2e-5 / 1.5e-6, base 9.2e-6 / 2.7e-6, agent 2.1 1.0e-5 / 2.8e-6 (scores / probabilities)
-on the RTX 5090, and 1.1e-5 / 3.1e-6, 2.1e-5 / 3.7e-6, 2.0e-5 / 4.2e-6 on a second x86-64 CPU. Goldens from
+on the RTX 5090, 1.1e-5 / 1.3e-6, 9.1e-6 / 3.5e-6, 1.6e-5 / 5.5e-6 on the RTX 4090, and 1.1e-5 / 3.1e-6,
+2.1e-5 / 3.7e-6, 2.0e-5 / 4.2e-6 on a second x86-64 CPU. Goldens from
 `v2.2.0` for the same three models (150 requests each, so the `fit_cases` collapses and their fallback rows are
 upstream's) have the same rows as the `v1.1.1` goldens on the 140 shared requests, and pass with 2,958 identical
-rows, every decision upstream's, scores within 1.8e-5 and probabilities within 4.7e-6, on CPU and the RTX 5090.
+rows, every decision upstream's, scores within 1.8e-5 and probabilities within 4.7e-6, on CPU and the RTX 5090;
+on the RTX 4090, small 9.7e-6 / 1.6e-6, base 1.0e-5 / 3.6e-6 and agent 2.1 2.7e-5 / 7.7e-6.
 
 **Decima 2.0 and 2.1 (measured 2026-10-06).** Upstream `v1.1.1`: 140 requests per model, 18 of them rejected
 upstream, 3 with a cut state for small and base (none for agent, whose states hold 2,048 tokens).

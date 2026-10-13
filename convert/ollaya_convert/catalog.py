@@ -735,9 +735,9 @@ CATALOG = {
         },
         "aliases": {"latest": "base"},
         "parity": "Ollaya's Rust runtime matches the author's own code (decima/model.py, render.py and systemone.py, "
-                  "fp32) on 581 questions from 122 requests for each of small and base (CPU, RTX 4090 and RTX 5090) "
-                  "and 591 questions from 132 requests for agent 2.2 (CPU and RTX 5090), ten of them too long for "
-                  "the option window: identical token rows and truncation, the same 18 rejected requests, the same "
-                  "decision on every question, scores within 2.2e-5 and probabilities within 5.4e-6.",
+                  "fp32) on 581 questions from 122 requests for each of small and base, and 591 questions from 132 "
+                  "requests for agent 2.2, ten of them too long for the option window, on CPU and CUDA (RTX 4090 and "
+                  "RTX 5090): identical token rows and truncation, the same 18 rejected requests, the same decision "
+                  "on every question, scores within 2.2e-5 and probabilities within 5.4e-6.",
     },
 }
