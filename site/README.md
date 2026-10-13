@@ -47,6 +47,7 @@ scripts/build.mjs       dist/: public/, Tailwind, asset hashes, pages, install.s
 scripts/check.mjs       Post-build checks on dist/
 scripts/fetch-blobs.mjs Downloads the derived blobs the manifests point to into ../registry/blobs
 scripts/archive-manifests.mjs Keeps each tag's manifest by digest in ../registry (ADR 0006)
+scripts/backup-blobs.mjs Copies ../registry/blobs to an R2 bucket after a deploy (ADR 0006)
 src/build.tsx           Page list and URL → file mapping; renders every page, 404, sitemap, …
 src/pages/              Page components: home, search, library, download, docs, 404, text files
 src/components/         Layout, header, footer, logo, icons, code blocks, tabs, badges
@@ -160,9 +161,19 @@ Linux. Edit the script there, never in `site/`.
 npx wrangler login     # or: export CLOUDFLARE_API_TOKEN=... ("Edit Cloudflare Workers" token template)
 node scripts/fetch-blobs.mjs   # every blob any kept manifest needs, from the live site
 npm run deploy         # optionally: SITE_ORIGIN=https://… npm run deploy (registry packaged for it)
+node scripts/backup-blobs.mjs ollaya-registry-blobs   # copy the blobs to R2
 ```
 
 This is an assets-only Worker, which is free: static asset requests are not billed and there is no
 script to invoke. Each custom domain requires its zone (`ollaya.dev`, `cobanov.dev`) in the same
 Cloudflare account, with no existing DNS record for that host; Wrangler creates the DNS record and
 certificate on the first deploy. The `*.workers.dev` URL also stays available (`workers_dev: true`).
+
+**Blob backup.** The derived blobs (graphs, configs, calibration) are not in git and are not
+byte-reproducible in general, and old ones stay referenced by the manifests kept by digest. After
+each deploy, `scripts/backup-blobs.mjs` copies `../registry/blobs` to the R2 bucket
+`ollaya-registry-blobs`, which nothing serves: it checks each blob against its name and uploads
+only the ones the bucket's `INDEX` object doesn't list yet (`--dry-run` lists them, `--all` sends
+everything again). The bucket is created once with `npx wrangler r2 bucket create
+ollaya-registry-blobs`. To restore a blob: `npx wrangler r2 object get
+ollaya-registry-blobs/blobs/sha256-<hex> --remote --file ../registry/blobs/sha256-<hex>`.

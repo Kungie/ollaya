@@ -297,6 +297,7 @@ pub fn show(store: &Store, info: &ModelInfo) -> ShowResponse {
         model_info,
         capabilities,
         modified_at: utc(e.modified),
+        digest: bare(&e.digest),
     }
 }
 

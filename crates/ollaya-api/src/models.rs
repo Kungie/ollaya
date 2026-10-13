@@ -85,6 +85,9 @@ pub struct ShowResponse {
     /// Open set: `choice`, `score`, `noul`, `act`.
     pub capabilities: Vec<String>,
     pub modified_at: DateTime<Utc>,
+    /// sha256 of the manifest, bare hex, as in `/api/tags`. Servers before 0.13.0 don't send it.
+    #[serde(default)]
+    pub digest: String,
 }
 
 /// One `GET /api/ps` entry.

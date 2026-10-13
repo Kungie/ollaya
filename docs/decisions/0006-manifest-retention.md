@@ -1,6 +1,6 @@
 # 0006: Every published manifest stays fetchable by digest
 
-- Status: proposed, 2026-10-13 (issue #64)
+- Status: accepted, 2026-10-13 (issue #64); shipped in 0.13.0
 - Applies to: the static registry on ollaya.dev (`registry/`, `site/`), `convert/ollaya_convert/package.py`,
   and model names in the client (`ollaya pull`, `/api/pull`).
 
@@ -81,7 +81,9 @@ Blobs are never removed by anything but a deploy without them, which the build r
   registry's `tag` points to now. The tag is not checked against the registry; OCI clients ignore it
   for the same reason (a static registry has no index of which tags a digest was published under).
 - `name@sha256:<hex>` stores it under the tag `sha256-<hex>`; the name lists as
-  `name@sha256:<hex>`, and `name:sha256-<hex>` is the same name.
+  `name@sha256:<hex>`, and `name:sha256-<hex>` is the same name. `ollaya list` and `ollaya ps`
+  shorten it to the digest's first 12 hex digits, as docker shortens image IDs; commands take only
+  the full name, and `ollaya show` (`digest` in `/api/show`) prints the full digest.
 - **Verified before anything is stored.** The manifest's sha256 must equal the digest before its JSON
   is parsed or any blob is downloaded; otherwise `502 DIGEST_MISMATCH` and nothing changes. A 404 is
   `404 MODEL_NOT_FOUND` with its own message (`... it has no manifest with that digest`); the HTML
@@ -91,6 +93,9 @@ Blobs are never removed by anything but a deploy without them, which the build r
   `ollaya run laya:en@sha256:<hex>` pulls when `laya:en` is another version.
 - **Writes.** `/api/create` `model` and `/api/copy` `destination` refuse a digest (`422`).
 - **Routers.** A digest pins the router manifest, not its targets: they are pulled by tag, as before.
+  To pin a routed model, pin its target (`laya:en@sha256:<hex>`). Pinning the targets through the
+  router would need router blobs that name `laya:en@sha256:<hex>`, which clients before 0.13.0
+  can't parse.
 
 ## Consequences
 
@@ -98,17 +103,19 @@ Blobs are never removed by anything but a deploy without them, which the build r
   are carried forward. The backfill with `--history` keeps 17 older versions in git history whose
   blobs ollaya.dev still serves: earlier builds of the nine `laya` tags, `nli:modernbert-large` and
   `kev:0.8b`. 15 older ones are left
-  out: their blob URLs are on `ollaya.cobanov.dev` (before the move to ollaya.dev), which the build
-  doesn't accept for this origin.
+  out on purpose: their blob URLs are on `ollaya.cobanov.dev` (0.3.1 and earlier, before the move to
+  ollaya.dev), which the build doesn't accept for this origin, and keeping them isn't worth an
+  exception in the build.
 - **Cost today** (2026-10-13): 65 tags are 46 distinct manifests; with the 17 older ones, 63 files
   of 170 KiB in git. Their blobs are 174 files, 204 MiB, of which 9 files and 20 MiB serve only the
   older manifests; the largest blob is 13.6 MiB. The built site is 522 files. Each later tag move adds
   one manifest file plus the new derived blobs, which a deploy publishes anyway; what retention adds
   is that the old blobs stay. At a few dozen moves a month that is hundreds of files a year against
   the 20,000-file limit; bytes are not limited.
-- **The live site is the only full copy of old blobs** besides the deployer's `registry/blobs`.
-  Losing both loses the old manifests' graphs, which are not byte-reproducible in general (ONNX
-  exports). A copy of `registry/blobs` somewhere durable (an R2 bucket, a release asset) would remove
-  that risk; it is not part of this decision.
+- **A backup of the blobs in R2.** Besides the live site and the deployer's `registry/blobs`, every
+  deploy is followed by `node scripts/backup-blobs.mjs <bucket>` (`site/README.md`, "Deploy"), which
+  copies the blobs, checked against their names, to an R2 bucket that nothing serves. Old manifests'
+  graphs are not byte-reproducible in general (ONNX exports), so this is the copy to restore from if
+  both of the others are lost.
 - **Clients older than this change** keep working: tags are unchanged, and the `sha256-*` files are
   invisible to them (the site's catalog skips them).

@@ -843,6 +843,7 @@ Details of one local model.
 | `model_info` | object | Namespaced facts. `general.*` keys are stable: `general.architecture` (string), `general.languages` (array of string: the languages the model was trained and evaluated for, ISO 639-1 codes or `multilingual`; a model on a multilingual base may still read others), `general.source` (string). `<family>.*` keys are family-specific (e.g. `laya.context_length`, `laya.head_max_len`, `laya.encoder`, `laya.layout`). A router has `general.*` keys only. |
 | `capabilities` | array of string | Open set: `choice`, `score`, `noul` (question types), `act` (has an act head: `laya.act_probability` is non-null). For a router, the intersection of its targets' capabilities. |
 | `modified_at` | string | As in `/api/tags` |
+| `digest` | string | Model digest, bare hex, as in `/api/tags`: the `<hex>` of `name@sha256:<hex>` ([§3](#3-model-names-and-resolution)). Since 0.13.0. |
 
 ```shell
 curl http://localhost:11435/api/show -d '{"model": "laya:en"}'
@@ -874,7 +875,8 @@ curl http://localhost:11435/api/show -d '{"model": "laya:en"}'
     "laya.head_max_len": 192
   },
   "capabilities": ["choice", "score", "noul", "act"],
-  "modified_at": "2026-09-24T08:11:02.117Z"
+  "modified_at": "2026-09-24T08:11:02.117Z",
+  "digest": "e1b74e2bbeed9fcbbfc7e6ad44a5cbb38d66f7f24f321f699119b56cc0f7158a"
 }
 ```
 
@@ -902,8 +904,8 @@ must equal the digest before its JSON is read or any blob is downloaded. It is t
 the name's tag (`laya:en@sha256:<hex>` replaces the local `laya:en`), or under `sha256-<hex>` when
 the name has no tag, whatever the tag points to in the registry now. The tag is not checked
 against the registry. A router pinned by digest still pulls its targets by their tags. ollaya.dev
-serves by digest every manifest published under a tag (from the release that added this, and the
-older ones whose files it still had; [ADR 0006](decisions/0006-manifest-retention.md)).
+serves by digest every manifest published under a tag (from 0.13.0 on, and the older ones whose
+files it still had; [ADR 0006](decisions/0006-manifest-retention.md)).
 
 | Request field | Type | Required | Default | Rules |
 |---|---|---|---|---|

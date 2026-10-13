@@ -361,6 +361,7 @@ curl http://localhost:11435/api/show -d '{"model": "laya:en"}'
 | `model_info` | `general.architecture`, `general.languages`, `general.source` (the pinned Hugging Face repository), plus family-specific keys such as `laya.context_length`. `general.languages` lists the languages the model was trained and evaluated for (`multilingual` for many); a model built on a multilingual base may still read other languages, so measure on your data. |
 | `capabilities` | Question types it answers (`choice`, `score`, `noul`), plus `act` if it has an act head |
 | `modified_at` | As in `/api/tags` |
+| `digest` | The model's digest, as in `/api/tags`: pin this version with `laya:en@sha256:<digest>` |
 
 A router is shown as itself, not resolved to a target.
 

@@ -68,6 +68,18 @@ pub async fn pull(client: &Client, model: &str, insecure: bool) -> Result<()> {
     result.map_err(Into::into)
 }
 
+/// A name pinned by digest (`laya@sha256:<64 hex>`), shortened for a table as docker shortens
+/// image IDs: the digest's first 12 hex digits. Commands take only the full name, which
+/// `ollaya show` prints as the model's digest.
+fn table_name(name: &str) -> String {
+    match name.split_once("@sha256:") {
+        Some((model, hex)) if hex.len() > 12 && hex.bytes().all(|b| b.is_ascii_hexdigit()) => {
+            format!("{model}@sha256:{}", &hex[..12])
+        }
+        _ => name.to_owned(),
+    }
+}
+
 pub async fn list(client: &Client) -> Result<()> {
     let tags = client.tags().await?;
     let rows: Vec<Vec<String>> = tags
@@ -75,7 +87,7 @@ pub async fn list(client: &Client) -> Result<()> {
         .iter()
         .map(|m| {
             vec![
-                m.name.clone(),
+                table_name(&m.name),
                 m.digest.chars().take(12).collect(),
                 render::bytes(m.size),
                 render::ago(m.modified_at),
@@ -96,7 +108,7 @@ pub async fn ps(client: &Client) -> Result<()> {
         .iter()
         .map(|m| {
             vec![
-                m.name.clone(),
+                table_name(&m.name),
                 m.digest.chars().take(12).collect(),
                 render::bytes(m.size),
                 m.device.clone(),
@@ -200,6 +212,10 @@ pub fn summary(s: &ShowResponse) -> String {
         ("engine", info("general.engine")),
         ("languages", info("general.languages")),
         ("derived from", Some(d.parent_model.clone())),
+        (
+            "digest",
+            (!s.digest.is_empty()).then(|| format!("sha256:{}", s.digest)),
+        ),
     ] {
         if let Some(v) = value.filter(|v| !v.is_empty()) {
             model.push((label.to_owned(), v));
@@ -388,5 +404,43 @@ mod tests {
         assert_eq!(req.parameters.unwrap().precision.as_deref(), Some("fp32"));
         assert_eq!(req.license, Some(License::One("MIT".into())));
         assert_eq!(req.description.as_deref(), Some("Triage"));
+    }
+
+    const HEX: &str = "9e5247e3c4f50122c3f8decd0bb1369dae719538582ae882436852e36e700c80";
+
+    #[test]
+    fn tables_shorten_a_name_pinned_by_digest() {
+        assert_eq!(
+            table_name(&format!("laya@sha256:{HEX}")),
+            "laya@sha256:9e5247e3c4f5"
+        );
+        assert_eq!(
+            table_name(&format!("127.0.0.1:8123/library/laya@sha256:{HEX}")),
+            "127.0.0.1:8123/library/laya@sha256:9e5247e3c4f5"
+        );
+        assert_eq!(table_name("laya:en"), "laya:en");
+        assert_eq!(table_name("laya@sha256:9e5247e3"), "laya@sha256:9e5247e3");
+    }
+
+    #[test]
+    fn show_prints_the_full_digest() {
+        let mut s: ShowResponse = serde_json::from_value(serde_json::json!({
+            "license": "", "modelfile": "", "parameters": "", "questions": null, "router": null,
+            "details": {"parent_model": "", "format": "onnx", "family": "laya", "families": ["laya"],
+                        "parameter_size": "421M", "quantization_level": "F16/F32"},
+            "model_info": {}, "capabilities": ["choice"], "modified_at": "2026-10-13T00:00:00Z",
+            "digest": HEX
+        }))
+        .unwrap();
+        let line = |s: &ShowResponse| {
+            summary(s)
+                .lines()
+                .find(|l| l.trim_start().starts_with("digest"))
+                .map(|l| l.split_whitespace().last().unwrap_or_default().to_owned())
+        };
+        assert_eq!(line(&s), Some(format!("sha256:{HEX}")));
+        // A server before 0.13.0 sends no digest: no line.
+        s.digest.clear();
+        assert_eq!(line(&s), None);
     }
 }
