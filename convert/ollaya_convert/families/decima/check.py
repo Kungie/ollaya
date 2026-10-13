@@ -2,15 +2,15 @@
 
     uv run python -m ollaya_convert.families.decima.check [--model decima-small] [--td 400]
 
-Upstream: serve.py's verdict, then decima.systemone.to_question, DecimaConfig.state_of / choice_of and the
-checkpoint's tokenizer through transformers, truncated as Decima._encode truncates (`ref.encode`). The port:
+Upstream: serve.py's verdict, then decima.systemone.to_question, DecimaConfig.state_of / choices_of (render.py) and
+the checkpoint's tokenizer through transformers, truncated as Decima._encode truncates (`ref.encode`). The port:
 `layout.DecimaLayout` on the same tokenizer.json loaded by HF `tokenizers` (what the runtime loads), configured by
 `decision_for` below. Every question's state row and option rows must be identical, so must the state's truncation
 flag (upstream's 422 STATE_TRUNCATED), and rejections must match. Requests Ollaya's shared question parser rejects
 first are counted on their own.
 
 The shared set is `llm_common.cases` (the edge cases and typed-decisions rows); `extra_cases` adds the inputs
-Decima's mapping treats specially.
+Decima's mapping treats specially, and `fit_cases` the questions too long for the option window (render.py).
 """
 from __future__ import annotations
 
@@ -32,7 +32,8 @@ NOUL = {"options": ["yes", "no"], "criteria": "\nTrue if: {true}\nFalse if: {fal
 
 
 def decision_for(d):
-    """The layout's fields of decision.json, from the upstream config and modules."""
+    """The layout's fields of decision.json, from the upstream config and modules. `option_fit` (decima.json's
+    choice_fit) is written only for a model that has it, so the decision.json of the models without it is unchanged."""
     from decima import systemone
 
     cfg, tok = d.cfg, d.tok
@@ -48,6 +49,7 @@ def decision_for(d):
         "limits": {"questions": [1, systemone.MAX_QUESTIONS], "choices": [2, systemone.MAX_CHOICES],
                    "levels": [systemone.MIN_LEVELS, systemone.MAX_LEVELS]},
         "temperature": cfg.temperature,
+        **({"option_fit": True} if cfg.choice_fit else {}),
     }
 
 
@@ -88,8 +90,63 @@ def extra_cases():
     ]
 
 
+# A question long enough to push every option out of the 64-token option window on its own.
+REVIEW = ("You are the merge gate of a payments service. Read the pull request below and decide whether it can be "
+          "merged without a second human reviewer. Consider security, data loss, backwards compatibility of the public "
+          "API, database migrations, the amount of test coverage that comes with the change, and whether the author "
+          "touched code that moves money. When in doubt, ask for a second reviewer.")
+DIFF = ("diff --git a/billing/refund.py b/billing/refund.py\n-    if amount > order.total:\n+    if amount >= order.total:\n"
+        "         raise RefundError('refund exceeds the order total')\n")
+
+
+def fit_cases():
+    """Questions whose instructions and option do not fit max_choice_tokens together: render.py shortens the question's
+    copy beside each option (option_fit), or, without it, keeps the right-hand cut unless two options' rows collapse.
+    Each request holds one question, so a collapse in one never changes another's rendering."""
+    route = ("Route this support ticket to exactly one team. The ticket was written by a paying customer through the "
+             "web form, may mix several issues, and may be in any language; pick the team that has to act first, not "
+             "the one the customer names, and ignore greetings, signatures and quoted earlier replies.")
+    calm = ("the customer stays calm and polite through the whole conversation, thanks the agent for every answer, "
+            "never raises their voice, never threatens to cancel the subscription or to leave for a competitor, and "
+            "accepts the proposed solution without asking for a refund, a discount, a call with a manager or any other "
+            "compensation")
+    ws = ("Decide\twhether  the\nfollowing\u00a0request\u2003needs\u3000a human\u001fto approve it \u2028before "
+          "it\u0085runs; Re\u0301sume\u0301 the plan, zero\u200bwidth stays inside a word, and read every line of "
+          "the request carefully, including the parts that only repeat what was said before, the signature, the "
+          "quoted earlier replies and the legal footer that the mail client adds to every message, then answer.")
+    q = {
+        "noul_true_false": {"type": "noul", "instructions": REVIEW,
+                            "criteria": {"true": "the diff only touches tests, documentation or comments",
+                                         "false": "it changes refunds, charges, authentication or migrations"}},
+        "noul_long": {"type": "noul", "instructions": REVIEW},
+        "choice_long": {"type": "choice", "instructions": route,
+                        "criteria": {"billing": "charges, refunds, invoices", "technical": "bugs, outages, errors",
+                                     "account": "login, password, profile", "other": None}},
+        "choice_mid": {"type": "choice", "instructions": "Which team should take this ticket first?",
+                       "criteria": {"billing": "charges, refunds, invoices, duplicate payments, failed card "
+                                               "payments, VAT questions and anything else about money " * 2,
+                                    "technical": "bugs, outages, errors, slow pages, broken integrations " * 2}},
+        "score_long": {"type": "score", "instructions": route.replace("Route this support ticket to exactly one "
+                                                                     "team", "Rate how upset the customer is"),
+                       "criteria": [None, "calm", "annoyed", "angry, threatening to leave"]},
+        "score_partial_collapse": {"type": "score",
+                                   "instructions": "How upset is the customer who wrote this ticket to support today?",
+                                   "criteria": [calm, calm + " twice", "furious"]},
+        "choice_no_spaces": {"type": "choice",
+                             "instructions": "请根据工单内容判断应该由哪个团队首先处理这个问题客户可能同时提到多个问题请选择必须"
+                                             "最先采取行动的团队而不是客户点名的团队忽略问候语签名和引用的旧回复" * 2,
+                             "criteria": {"billing": "账单", "technical": "技术", "other": None}},
+        "noul_whitespace": {"type": "noul", "instructions": ws},
+        "choice_long_option_text": {"type": "choice", "instructions": REVIEW,
+                                    "criteria": {"merge": "merge it now " * 30, "wait": "ask for a second reviewer"}},
+        "noul_few_chars": {"type": "noul", "instructions": "\U00013000" * 40 + "?"},
+    }
+    return [("decima/fit/" + k, wire({"pr": DIFF, "author": "first-time contributor"}) if i % 2 else DIFF,
+             wire({k: v})) for i, (k, v) in enumerate(q.items())]
+
+
 def all_cases(td):
-    return cases.edge_cases() + cases.typed_decisions(td) + extra_cases()
+    return cases.edge_cases() + cases.typed_decisions(td) + extra_cases() + fit_cases()
 
 
 def shared_rule(questions):

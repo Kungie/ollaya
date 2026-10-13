@@ -1,4 +1,4 @@
-# decima (`decima-late-interaction-v1`)
+# decima (`decima-late-interaction-v1`, `-v2`)
 
 **Decima** by A. M. Madani ([amyrmahdy on Hugging Face](https://huggingface.co/amyrmahdy),
 [amyrmahdy/decima](https://github.com/amyrmahdy/decima), Apache-2.0) is a family of multilingual encoders
@@ -10,25 +10,44 @@ their order cannot change the answer. Score questions go through a cumulative-li
 | Tag | Weights (fp32, `pytorch/` of the repository) | Encoder | Temperature |
 |---|---|---|---|
 | `decima:base`, `decima:latest` | `amyrmahdy/decima-base@2468005d` (Hub tag `v2.0`): `encoder/model.safetensors` (1.23 GB) and `head.safetensors` (57 MB) | `jhu-clsp/mmBERT-base` (MIT), 321M parameters | 0.7269 |
-| `decima:agent` | `amyrmahdy/decima-agent@86a07aab` (Hub tag `v2.1`): the same two files, fine-tuned from decima-base for coding-agent decisions | the same | 0.6082 |
+| `decima:agent` | `amyrmahdy/decima-agent@5c14a460` (Hub tag `v2.2`): the same two files, fine-tuned from decima-base for coding-agent decisions and knowledge-graph judgments | the same | 0.7193 |
 | `decima:small` | `amyrmahdy/decima-small@2e7f4d07` (Hub tag `v1.1.1`): `encoder/model.safetensors` (471 MB) and `head.safetensors` (19 MB) | `intfloat/multilingual-e5-small` (MIT), 122M parameters | 0.9356 |
 
 The temperatures are the author's, from each checkpoint's `decima.json`. The code is pinned to the GitHub tag
-`v1.1.1` (`2df60942`); the `decima/` package is unchanged at `v2.0.0` (`a58f99c9`), the release of decima-base
-and decima-agent, and on `main` as of 2026-10-06. The author also publishes int8 ONNX exports; Ollaya's graphs
-read the fp32 checkpoints instead, so that the weights come unmodified from the files the author's own code loads.
+`v2.2.0` (`efaefe2a`, tag object `44470b2d`), the release of decima-agent 2.2. Small, base and agent 2.1 were
+exported and checked against `v1.1.1` (`2df60942`), whose `decima/` was unchanged through `v2.0.0`; `v2.1.0`
+added `decima/render.py` (unchanged at `v2.2.0`), which changes their option rows only when the old cut makes two
+of a question's options identical (below). Decima-agent 2.2 is the first checkpoint whose `decima.json` has
+`"choice_fit": true`, so it runs on its own layout id, `decima-late-interaction-v2`: an Ollaya without the fitted
+rendering refuses it instead of cutting its options. `decima:agent` pointed at 2.1 (`86a07aab`, Hub tag `v2.1`,
+temperature 0.6082) until 2.2.
+
+The author also publishes int8 ONNX exports; Ollaya's graphs read the fp32 checkpoints instead, so that the weights
+come unmodified from the files the author's own code loads.
 
 ## Rows
 
-`crates/ollaya-decision/src/decima.rs` ports `decima/systemone.py` (`to_question`) and the text and
-tokenization steps of `decima/model.py`; `convert/ollaya_convert/families/decima/layout.py` is its Python twin.
-Every question becomes one state row and one row per option, each encoded on its own:
+`crates/ollaya-decision/src/decima.rs` ports `decima/systemone.py` (`to_question`), the text and tokenization
+steps of `decima/model.py` and `decima/render.py` (`choice_texts`); `convert/ollaya_convert/families/decima/layout.py`
+is its Python twin. Every question becomes one state row and one row per option, each encoded on its own:
 
 ```text
-state row   [cls] tok(state_prefix  + normalize(text + "\n" + state))[..max_state_tokens - 2]  [sep]
-option row  [cls] tok(option_prefix + normalize(text + " " + option))[..62]                    [sep]
+state row   [cls] tok(state_prefix + normalize(text + "\n" + state))[..max_state_tokens - 2]  [sep]
+option row  [cls] tok(option text)[..62]                                                   [sep]
+full        option_prefix + normalize(text + " " + option)
+fitted      option_prefix + head + " … " + normalize(option)
 ```
 
+- **Option text** (`render.py`). `head` is the longest run of leading words of `normalize(text)` (Python's
+  `str.split()`, joined by one space) with which the fitted text fits 64 tokens, found by upstream's binary
+  search; with no word, the text is `option_prefix + normalize(option)`, cut if it is still too long.
+  - **v2** (`option_fit: true` in `decision.json`, the author's `choice_fit`; decima-agent 2.2): an option keeps
+    its full text when it fits 64 tokens, or when it has at most 62 characters (upstream's shortcut, which
+    assumes a token is at least one character); any other option is fitted. The full question still goes on the
+    state row.
+  - **v1** (small, base, agent 2.1): every option keeps its full text, cut on the right as before, unless two of
+    the question's cut rows come out identical (a long question pushes every option out of the window, and
+    `yes` and `no` tie at 0.5). Then that question's options are rendered as in v2.
 - **Per model** (`decision.json`): small uses e5's prefixes `query: ` and `passage: `, `[cls]` 0 and `[sep]` 2;
   base and agent use no prefix, `<bos>` 2 and `<eos>` 1. `max_state_tokens` is 512, and 2,048 for agent.
 - **Text.** The question's instructions: a string as is, anything else as `json.dumps(ensure_ascii=False)`,
@@ -45,9 +64,20 @@ option row  [cls] tok(option_prefix + normalize(text + " " + option))[..62]     
   it.
 
 `python -m ollaya_convert.families.decima.check --model <slug>` compares the port with upstream on the shared
-request set (the edge cases, the 400 typed-decisions rows and 9 inputs Decima's mapping treats specially). For
-each model: 469 requests with identical rows (12 of them with a cut state for small, 7 for base, none for
-agent), 18 rejected by both, 3 refused first by Ollaya's shared question rules, 0 differences.
+request set: the edge cases, the 400 typed-decisions rows, 9 inputs Decima's mapping treats specially and 10
+questions too long for the option window (`fit_cases`: long noul instructions with true/false criteria, long
+choice and score questions, a question with no spaces, odd whitespace and NFD text, an option longer than the
+window, a few characters that are many tokens). For small, base, agent 2.1 and agent 2.2, against upstream
+`v2.2.0`: 479 requests with identical rows (12 of them with a cut state for small, 7 for base, none for agent),
+18 rejected by both, 3 refused first by Ollaya's shared question rules, 0 differences.
+
+Outside `fit_cases`, only one question of the set (an extra case with a 444-character option) has an option row
+over 64 tokens, and its options stay apart, so the older models' rows there are the same as with `v1.1.1`. In
+`fit_cases` the right-hand cut collapses 8 of the 10 questions for small and 7 for base and agent; with the
+fallback, 8 of them get new rows for small and 6 for base and agent 2.1. Agent 2.2 fits 8 of them and the
+long-option case, whether or not they collapse. One collapse stays: 40 Egyptian hieroglyphs and `yes`/`no` are 45
+characters but over 64 mmBERT tokens, so upstream's character shortcut keeps the full text and both rows are cut
+to the same tokens (noul 0.5), with and without `choice_fit`. The port does the same.
 
 ## The graph
 
@@ -65,7 +95,8 @@ outputs  scores                    float32 [options]              the raw score,
 
 The runner groups consecutive questions into one run as long as the padded tokens stay within the shared token
 budget. Against upstream's PyTorch modules, on 295 questions, the scores are within 9.7e-6 (small), 1.7e-5
-(base) and 1.3e-5 (agent), and the projections within 1.1e-5.
+(base), 1.3e-5 (agent 2.1) and 1.5e-5 (agent 2.2), and the projections within 1.1e-5 (5.2e-5 for agent 2.2's
+`ordinal_gap`). The `-v2` layout uses the same graph; only the option rows differ.
 
 ## Answers
 
@@ -87,15 +118,38 @@ budget. Against upstream's PyTorch modules, on 295 questions, the scores are wit
 - **Option cache.** Upstream's `Decima` caches the encodings of up to 256 option sets; Ollaya encodes every
   row on every request, in the same run as the state.
 - **int8.** Not used (above).
+- **Request options.** Upstream's server (2.2.0) also takes `"long": "chunk"` (decide an over-long state in
+  overlapping windows), `"aggregate"` and `"min_confidence"` (an `abstain` flag), all off by default and outside
+  TypeSafe's schema. Ollaya's `/v1/systemone` does not take them: a long state is still `STATE_TRUNCATED`.
+- **Batching.** Upstream's `system_one` now runs a request's questions through `decide_many`, which the author
+  states gives the numbers of one question at a time; Ollaya batches them in one graph run, as before.
 
-## Parity (measured 2026-10-06)
+## Parity
 
 Goldens: `python -m ollaya_convert.families.decima.goldens out/<slug>` runs the author's `model.py` and
-`systemone.py` in fp32 on the CPU: 140 requests per model, 18 of them rejected upstream, 3 with a cut state for
-small and base (none for agent, whose states hold 2,048 tokens). `parity_decima` checks the rejections and
-every row id for id, then the graph's outputs, the decisions and the `/v1/systemone` answers against upstream's
-`system_one`. On CPU the ONNX Runtime is pyke's 1.28.0, linked statically; on CUDA it is Microsoft's 1.28.2 from
-the CUDA 13 pack.
+`systemone.py` in fp32 on the CPU. `parity_decima` checks the rejections and every row id for id, then the graph's
+outputs, the decisions and the `/v1/systemone` answers against upstream's `system_one`. On CPU the ONNX Runtime is
+pyke's 1.28.0, linked statically; on CUDA it is Microsoft's 1.28.2 from the CUDA 13 pack.
+
+**Decima-agent 2.2 (measured 2026-10-13).** Upstream `v2.2.0`: 150 requests, the 140 below and the 10
+`fit_cases`, 18 rejected upstream.
+
+| Model | Device | Questions | Rows | Decisions | Scores max | Probabilities max |
+|---|---|---|---|---|---|---|
+| agent 2.2 | x86-64 CPU | 591 | 2,958 identical | 591/591 | 2.2e-5 | 5.4e-6 |
+| agent 2.2 | CUDA, RTX 5090 | 591 | 2,958 identical | 591/591 | 1.3e-5 | 2.4e-6 |
+
+The ordinal projections are within 1.4e-4 (CPU) and 2.9e-5 (CUDA). The RTX 4090 run is still to do.
+
+**The older models on this runtime (2026-10-13).** On their 0.11.0 goldens (`v1.1.1`, below) the rows and numbers
+are those of 0.11.0: small 1.2e-5 / 1.5e-6, base 9.2e-6 / 2.7e-6, agent 2.1 1.0e-5 / 2.8e-6 (scores / probabilities)
+on the RTX 5090, and 1.1e-5 / 3.1e-6, 2.1e-5 / 3.7e-6, 2.0e-5 / 4.2e-6 on a second x86-64 CPU. Goldens from
+`v2.2.0` for the same three models (150 requests each, so the `fit_cases` collapses and their fallback rows are
+upstream's) have the same rows as the `v1.1.1` goldens on the 140 shared requests, and pass with 2,958 identical
+rows, every decision upstream's, scores within 1.8e-5 and probabilities within 4.7e-6, on CPU and the RTX 5090.
+
+**Decima 2.0 and 2.1 (measured 2026-10-06).** Upstream `v1.1.1`: 140 requests per model, 18 of them rejected
+upstream, 3 with a cut state for small and base (none for agent, whose states hold 2,048 tokens).
 
 | Model | Device | Questions | Rows | Decisions | Scores max | Probabilities max |
 |---|---|---|---|---|---|---|
@@ -105,9 +159,9 @@ the CUDA 13 pack.
 | base | x86-64 CPU | 581 | 2,922 identical | 581/581 | 2.0e-5 | 3.0e-6 |
 | base | CUDA, RTX 4090 | 581 | 2,922 identical | 581/581 | 9.1e-6 | 3.5e-6 |
 | base | CUDA, RTX 5090 | 581 | 2,922 identical | 581/581 | 9.2e-6 | 2.7e-6 |
-| agent | x86-64 CPU | 581 | 2,922 identical | 581/581 | 2.0e-5 | 4.3e-6 |
-| agent | CUDA, RTX 4090 | 581 | 2,922 identical | 581/581 | 1.6e-5 | 5.5e-6 |
-| agent | CUDA, RTX 5090 | 581 | 2,922 identical | 581/581 | 1.0e-5 | 2.8e-6 |
+| agent 2.1 | x86-64 CPU | 581 | 2,922 identical | 581/581 | 2.0e-5 | 4.3e-6 |
+| agent 2.1 | CUDA, RTX 4090 | 581 | 2,922 identical | 581/581 | 1.6e-5 | 5.5e-6 |
+| agent 2.1 | CUDA, RTX 5090 | 581 | 2,922 identical | 581/581 | 1.0e-5 | 2.8e-6 |
 
 The ordinal projections are within 6.8e-5 everywhere. On every device the `/v1/systemone` answers name the same
 choice as upstream's on every question, and their numbers agree to the fourth decimal (1.0e-4, the rounding).
@@ -116,19 +170,24 @@ choice as upstream's on every question, and their numbers agree to the fourth de
 
 Typed-decisions: all 400 test states, 2,000 questions, argmax against the majority label, through Ollaya's
 runtime (`logits` example and `quality_runtime.py`; small on the CPU, base and agent on CUDA). ECE at the
-author's temperature.
+author's temperature. No typed-decisions question has an option row over 64 tokens, so the rendering change does
+not touch these numbers.
 
 | Model | Accuracy | Choice | Score | Noul | ECE |
 |---|---|---|---|---|---|
 | base | **0.495** (989 of 2,000) | 0.432 | 0.496 | 0.555 | 0.073 |
-| agent | 0.486 (971) | 0.470 | 0.380 | 0.642 | 0.163 |
+| agent 2.1 | 0.486 (971) | 0.470 | 0.380 | 0.642 | 0.163 |
+| agent 2.2 | 0.461 (921) | 0.450 | 0.414 | 0.533 | 0.193 |
 | small | 0.432 (863) | 0.412 | 0.356 | 0.552 | 0.110 |
 
 The author reports 0.427 (95% interval 0.399 to 0.455) for small 1.1 and notes that every small model they
 tested was below this benchmark's majority-class baseline of 0.461; base and agent are above it. The author
 gives no typed-decisions figure for base or agent. Agent is trained for the decisions inside a coding agent's
-loop (secret and command gates, tool, command and model choice); the author measures it on 130 hand-written
-agent decisions (0.93, against 0.58 for base).
+loop (secret and command gates, tool, command and model choice); 2.2 adds knowledge-graph judgments and gate
+fixes from field logs. The author measures it on 40 agent cases written after training: 0.85 for 2.2, 0.83 for
+2.1, 0.60 for base (their earlier 130-case set had near-copies in training data). Agent 2.2 is 0.025 below 2.1 on
+typed-decisions (Ollaya's measurement, 2026-10-13; 2.1 reproduced at 0.486 the same day), at this benchmark's
+majority baseline, so `decima:latest` stays on base.
 
 ## Speed (measured 2026-10-06)
 
@@ -139,9 +198,10 @@ protocol of the 2026-10-01 sweep), on the RTX 4090 machine:
 |---|---|---|---|---|---|
 | small | 7.3 ms | 8.5 ms | 146 ms | 148 ms | 0.84 s / 0.58 s |
 | base | 15.1 ms | 15.4 ms | 438 ms | 452 ms | 1.43 s / 1.37 s |
-| agent | 14.8 ms | 15.9 ms | 439 ms | 442 ms | 1.27 s / 1.29 s |
+| agent 2.1 | 14.8 ms | 15.9 ms | 439 ms | 442 ms | 1.27 s / 1.29 s |
 
-On this CPU no other model Ollaya ships is as fast as small: the next are `laya:multilingual` at 308 ms and
+Agent 2.2 runs the same graph on the same file sizes and was not timed again. On this CPU no other model Ollaya
+ships is as fast as small: the next are `laya:multilingual` at 308 ms and
 `gliclass` at 563 ms (2026-10-01). The author measured one question with four options on one CPU core with
 their int8 exports and cached option encodings (14 ms for small, 47 ms for base on an NVIDIA GB10's ARM cores);
 Ollaya runs fp32 and encodes the options on every request.
@@ -150,7 +210,9 @@ Ollaya runs fp32 and encodes the options on every request.
 
 - **State.** 512 tokens per question for small and base, 2,048 for agent, the question's text included.
   Longer: `/v1/systemone` answers `STATE_TRUNCATED`, `/api/decide` answers from the first tokens.
-- **Options.** Each option row holds the question's text and the option in 64 tokens, so long instructions cut
-  the option's own text short, as upstream does. 2 to 255 choices, 2 to 10 score levels, 1 to 256 questions.
+- **Options.** Each option row holds the question's text and the option in 64 tokens. Agent 2.2 keeps the option
+  whole and shortens the question beside it; small and base keep the right-hand cut their training saw, unless it
+  makes two options identical (above). An option alone over 64 tokens is still cut. 2 to 255 choices, 2 to 10
+  score levels, 1 to 256 questions.
 - **Languages.** Multilingual. For small the author evaluated 20 languages (the weakest are Swahili and Hindi);
   for base, Persian costs about 5 points against English on the same tasks, and other languages are less tested.

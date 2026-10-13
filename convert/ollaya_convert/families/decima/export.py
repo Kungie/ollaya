@@ -42,6 +42,8 @@ from .check import decision_for, shared_rule, tokenizer
 from .layout import DecimaLayout, LayoutError, graph_inputs
 
 LAYOUT = "decima-late-interaction-v1"
+# The same graph; option rows always keep the option whole (decima.json's choice_fit, decision.json's option_fit).
+LAYOUT_FIT = "decima-late-interaction-v2"
 INPUT_NAMES = ["state_ids", "state_mask", "option_ids", "option_mask", "option_state"]
 OUTPUT_NAMES = ["scores", "ordinal_g", "ordinal_gap"]
 OPSET = 20
@@ -157,7 +159,7 @@ def export(slug, out_dir):
         raise SystemExit("the export differs from the reference by more than %.0e" % EXPORT_TOL)
 
     decision = {
-        "engine": "onnx", "family": "decima", "layout": LAYOUT,
+        "engine": "onnx", "family": "decima", "layout": LAYOUT_FIT if layout.get("option_fit") else LAYOUT,
         "upstream": {"repo": m["repo"], "revision": m["revision"], "tag": m["tag"], "checkpoint": ref.CHECKPOINT,
                      "code": ref.CODE, "license": "Apache-2.0", "base": m["base"]},
         "contract": {

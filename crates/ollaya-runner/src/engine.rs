@@ -99,6 +99,7 @@ pub const LAYOUTS: &[&str] = &[
     "jeeves-markers-v1",
     "clef-joint-v1",
     "decima-late-interaction-v1",
+    "decima-late-interaction-v2",
     "arbiter-fixed-v1",
 ];
 
@@ -158,9 +159,9 @@ pub fn load(
         "clef-joint-v1" => Ok(Box::new(crate::clef::ClefModel::load_files(
             files, device, threads,
         )?)),
-        "decima-late-interaction-v1" => Ok(Box::new(crate::decima::DecimaModel::load_files(
-            files, device, threads,
-        )?)),
+        "decima-late-interaction-v1" | "decima-late-interaction-v2" => Ok(Box::new(
+            crate::decima::DecimaModel::load_files(files, device, threads)?,
+        )),
         "arbiter-fixed-v1" => Ok(Box::new(crate::arbiter::ArbiterModel::load_files(
             files, device, threads,
         )?)),

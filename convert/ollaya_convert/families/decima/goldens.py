@@ -1,10 +1,10 @@
-"""Golden fixtures for the Rust port of `decima-late-interaction-v1`, from the author's `decima/model.py` in fp32.
+"""Golden fixtures for the Rust port of `decima-late-interaction-v1` and `-v2`, from the author's `decima/model.py` in fp32.
 
     uv run python -m ollaya_convert.families.decima.goldens OUT_DIR [--td-limit 40] [--device cpu]
 
 OUT_DIR is the export (its decision.json, which names the model, and tokenizer.json). Writes goldens-<model>.jsonl next
 to it, one JSON line per request of the shared set (the edge cases and --td-limit typed-decisions rows, as the shared request file
-has them) and `check.extra_cases`:
+has them), `check.extra_cases` and `check.fit_cases`:
     {"id", "state", "questions",
      "error": null | {"code": "INVALID_REQUEST" | "STATE_TRUNCATED", "message"},   upstream /v1/systemone's 422
      "rows": [{"qid", "type", "state_ids", "option_ids", "state_truncated"}],

@@ -713,8 +713,8 @@ CATALOG = {
                          "Decima-agent, both MIT License.\n"
                          "Licensed under the Apache License, Version 2.0.\n\n") + LICENSE_APACHE,
         # The fp32 PyTorch checkpoint under pytorch/ of each repository, the encoder and the late-interaction
-        # head in two files; the author's int8 ONNX exports are not used. The code is the GitHub tag v1.1.1
-        # (2df60942); decima/ is unchanged at v2.0.0, which released base and agent.
+        # head in two files; the author's int8 ONNX exports are not used. The code is the GitHub tag v2.2.0
+        # (efaefe2a), which released agent 2.2; small, base and agent 2.1 were exported against v1.1.1 (2df60942).
         "tags": {
             "small": _decima("decima-small", "2e7f4d0757df0215f48f2a9b2b589e1f3a6348ed",  # HF tag v1.1.1
                              "A. M. Madani's Decima-small 1.1: multilingual-e5-small with a late-interaction "
@@ -725,16 +725,19 @@ CATALOG = {
                             "A. M. Madani's Decima-base 2.0: mmBERT-base with Decima's late-interaction scorer "
                             "and ordinal head, with the author's temperature. 321M parameters, multilingual.",
                             "321M", 512),
-            "agent": _decima("decima-agent", "86a07aab1c340fa5869bdb754e57d3851a1d288a",  # HF tag v2.1
-                             "A. M. Madani's Decima-agent 2.1: Decima-base fine-tuned for the decisions inside "
-                             "a coding agent's loop (secret and command gates, tool, command and model choice). "
-                             "States up to 2,048 tokens.",
+            # HF tag v2.2 (2026-10-08), decima.json with choice_fit (decima-late-interaction-v2); v2.1 was
+            # 86a07aab1c340fa5869bdb754e57d3851a1d288a.
+            "agent": _decima("decima-agent", "5c14a460ff368b5bf3aaf086d1ab46292d668e32",
+                             "A. M. Madani's Decima-agent 2.2: Decima-base fine-tuned for the decisions inside "
+                             "a coding agent's loop (secret and command gates, tool, command and model choice) "
+                             "and knowledge-graph judgments. States up to 2,048 tokens.",
                              "321M", 2048),
         },
         "aliases": {"latest": "base"},
-        "parity": "Ollaya's Rust runtime matches the author's own code (decima/model.py and systemone.py, fp32) on "
-                  "581 questions from 122 requests for each of small, base and agent, on CPU and CUDA (RTX 4090 and "
-                  "RTX 5090): identical token rows and truncation, the same 18 rejected requests, the same decision "
-                  "on every question, scores within 2.0e-5 and probabilities within 5.5e-6.",
+        "parity": "Ollaya's Rust runtime matches the author's own code (decima/model.py, render.py and systemone.py, "
+                  "fp32) on 581 questions from 122 requests for each of small and base (CPU, RTX 4090 and RTX 5090) "
+                  "and 591 questions from 132 requests for agent 2.2 (CPU and RTX 5090), ten of them too long for "
+                  "the option window: identical token rows and truncation, the same 18 rejected requests, the same "
+                  "decision on every question, scores within 2.2e-5 and probabilities within 5.4e-6.",
     },
 }

@@ -1,5 +1,5 @@
 """The PyTorch reference for Decima (amyrmahdy/decima-small, -base and -agent): the author's own code
-(github.com/amyrmahdy/decima at v1.1.1, pinned below) on each model repository's `pytorch/` checkpoint, in fp32.
+(github.com/amyrmahdy/decima at v2.2.0, pinned below) on each model repository's `pytorch/` checkpoint, in fp32.
 
     d = ref.load("cpu", "decima-base")                   # upstream decima.model.Decima (fp32, eval)
     code, message = ref.verdict(d, state, questions)     # serve.py's checks: None, INVALID_REQUEST or STATE_TRUNCATED
@@ -12,7 +12,8 @@ for base and agent, both MIT) fine-tuned with a two-layer scorer (Apache-2.0). P
 on its own (the prefixes are e5's "query: " and "passage: " for small, empty for mmBERT):
 
     state row     state_prefix  + normalize(instructions + "\\n" + state)  (question_in_state)
-    option rows   choice_prefix + normalize(instructions + " " + option)   (question_in_choices), one per option
+    option rows   choice_prefix + normalize(instructions + " " + option)   (question_in_choices), one per option,
+                  rendered by decima/render.py (below)
     scorer        per option row: [self-attention, cross-attention over the state row's tokens, FFN] x 2, the
                   masked mean, a linear score, plus the bi-encoder skip sim_scale * (cos(mean state, mean option)
                   - sim_center)  ->  one raw score s_k per option; options never see each other
@@ -23,12 +24,16 @@ Delegated to upstream code, so it cannot drift:
   * question mapping       decima.systemone.to_question: choice "label: description" (the label alone without
                            one), noul "yes"/"no" with "True if / False if" lines from its criteria, score levels,
                            the question id when there are no instructions
-  * texts                  DecimaConfig.state_of / choice_of (prefixes, where the question goes, normalize)
+  * texts                  DecimaConfig.state_of / choices_of (prefixes, where the question goes, normalize, and
+                           render.choice_texts: with decima.json's choice_fit an option row that would not fit
+                           max_choice_tokens keeps the option whole and shortens the question's copy beside it;
+                           without it, the right-hand cut unless that makes two options' rows identical)
   * tokenization           the checkpoint's tokenizer through transformers, truncated as Decima._encode does
   * the network            DecimaModel.choice_scores and log_probs, as Decima.logits runs them (fp32)
   * request checks         decima.systemone (to_question, system_one's own checks)
   * answers                decima.systemone.system_one (rounding, confidence, noul = P(yes), expected score)
-Re-stated here, cited against decima/serve.py at v1.1.1 (`do_POST`):
+Re-stated here, cited against decima/serve.py at v2.2.0 (`do_POST`, without its opt-in "long" and
+"min_confidence" request fields):
   * the state as text      `state if isinstance(state, str) else json.dumps(state, ensure_ascii=False)`
   * STATE_TRUNCATED        a question whose state row is over max_state_tokens tokens is a 422, checked in
                            question order before anything is answered. model.py itself truncates (keeps the
@@ -53,18 +58,21 @@ MODELS = {
     # The tag v2.0, 2026-10-04: the mmBERT-base generation.
     "decima-base": {"repo": "amyrmahdy/decima-base", "revision": "2468005d5e48e95eb74072c32a6d9df164578071",
                     "tag": "v2.0", "base": "jhu-clsp/mmBERT-base (MIT)"},
-    # The tag v2.1, 2026-10-05: decima-base fine-tuned for agent decisions, states up to 2,048 tokens.
-    "decima-agent": {"repo": "amyrmahdy/decima-agent", "revision": "86a07aab1c340fa5869bdb754e57d3851a1d288a",
-                     "tag": "v2.1", "base": "amyrmahdy/decima-base, on jhu-clsp/mmBERT-base (MIT)"},
+    # The tag v2.2, 2026-10-08: decima-base fine-tuned for agent decisions, states up to 2,048 tokens; its decima.json
+    # has "choice_fit": true. The tag v2.1 (2026-10-05, without choice_fit) was 86a07aab1c340fa5869bdb754e57d3851a1d288a.
+    "decima-agent": {"repo": "amyrmahdy/decima-agent", "revision": "5c14a460ff368b5bf3aaf086d1ab46292d668e32",
+                     "tag": "v2.2", "base": "amyrmahdy/decima-base, on jhu-clsp/mmBERT-base (MIT)"},
 }
 DEFAULT = "decima-small"
 CHECKPOINT = "pytorch"   # encoder/ (config, model.safetensors, tokenizer), head.safetensors, decima.json
 FILES = ["LICENSE", "pytorch/decima.json", "pytorch/head.safetensors", "pytorch/encoder/config.json",
          "pytorch/encoder/model.safetensors", "pytorch/encoder/tokenizer.json", "pytorch/encoder/tokenizer_config.json"]
-# decima/ (model.py, systemone.py, serve.py and the rest of the package) is byte-identical at v2.0.0 (a58f99c9), the
-# release of decima-base and decima-agent, and on main through 9b7b23de: one pin serves every model.
-CODE = {"repo": "https://github.com/amyrmahdy/decima", "tag": "v1.1.1",
-        "commit": "2df60942c68b0e1dfc87743462745bacdd936d8a"}
+# The release of decima-agent 2.2 (the annotated tag object 44470b2d on this commit). Its decima/render.py (the same at
+# v2.1.0, 097d9eb3) renders the options; the rest of what this reference runs gives v1.1.1's (2df60942) rows and
+# numbers, with which small, base and agent 2.1 were exported. system_one now batches a request's questions
+# (Decima.decide_many), which upstream states gives the same numbers as one by one.
+CODE = {"repo": "https://github.com/amyrmahdy/decima", "tag": "v2.2.0",
+        "commit": "efaefe2a3069d0085eeb73b95717efec5d92be94"}
 OUT = os.path.join(os.path.dirname(__file__), "..", "..", "..", "out")
 
 
@@ -106,8 +114,8 @@ def code():
                         t.extract(m, src, filter="data")
             os.remove(tmp)
     with open(os.path.join(src, "pyproject.toml"), encoding="utf-8") as f:
-        if 'version = "1.1.1"' not in f.read():
-            raise SystemExit("%s is not decima 1.1.1 (%s at %s)" % (src, CODE["repo"], CODE["commit"]))
+        if 'version = "2.2.0"' not in f.read():
+            raise SystemExit("%s is not decima 2.2.0 (%s at %s)" % (src, CODE["repo"], CODE["commit"]))
     if src not in sys.path:
         sys.path.insert(0, src)
     return src
@@ -140,8 +148,10 @@ def state_string(state):
 class _Null:
     """A model for system_one that answers nothing: running it applies upstream's request checks only."""
 
-    def decide_logits(self, state, q):
-        return np.zeros(len(q.choices))
+    def decide(self, state, q):
+        from decima.types import Decision
+
+        return Decision(probs=[1.0 / len(q.choices)] * len(q.choices), choices=list(q.choices))
 
 
 def verdict(d, state, questions):
@@ -176,7 +186,7 @@ def encode(d, state, questions):
         except SystemOneError as e:
             raise RequestError(e.code, str(e)) from e
         state_text = d.cfg.state_of(s, q.text, q.lang)
-        option_texts = [d.cfg.choice_of(q.text, c, q.lang) for c in q.choices]
+        option_texts = d.cfg.choices_of(d.tok, q.text, q.choices, q.lang)
         full = d.tok(state_text)["input_ids"]
         items.append({
             "qid": qid, "type": t, "question": q, "keys": keys, "state": s,
@@ -213,21 +223,12 @@ def forward(d, item):
     }
 
 
-class _Torch:
-    """system_one's model interface (DecimaOnnx.decide_logits) on the PyTorch reference."""
-
-    def __init__(self, d):
-        self.d = d
-
-    def decide_logits(self, state, q):
-        return self.d.logits([state], q)[0]
-
-
 def answers(d, state, questions):
-    """decima.systemone.system_one on the PyTorch reference: the answers object of upstream's /v1/systemone."""
+    """decima.systemone.system_one on the PyTorch reference (Decima.decide_many, as serve.py's DecimaOnnx): the answers
+    object of upstream's /v1/systemone."""
     from decima.systemone import system_one
 
-    return system_one(_Torch(d), state, questions)
+    return system_one(d, state, questions)
 
 
 def main():

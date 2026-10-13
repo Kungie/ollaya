@@ -1,5 +1,6 @@
-//! The `decima-late-interaction-v1` engine: Decima's e5-small encoder and late-interaction scorer
-//! in one ONNX graph (`ollaya_decision::decima` builds the rows).
+//! The `decima-late-interaction-v1` and `-v2` engine: Decima's encoder and late-interaction scorer
+//! in one ONNX graph (`ollaya_decision::decima` builds the rows; the two layouts differ only in how
+//! option rows are rendered).
 //!
 //! The graph maps `state_ids` / `state_mask` [q, ls] (one state row per question), `option_ids` /
 //! `option_mask` [o, lo] (every option row, questions in order) and `option_state` [o] (each
@@ -11,7 +12,9 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use ndarray::{Array1, Array2, Ix1};
-use ollaya_decision::decima::{DecimaEncoder, DecimaLayout, DecimaQuestion, DecimaRequest, LAYOUT};
+use ollaya_decision::decima::{
+    DecimaEncoder, DecimaLayout, DecimaQuestion, DecimaRequest, LAYOUT, LAYOUT_FIT,
+};
 use ollaya_decision::{Calibration, CalibrationFile, Questions, TokenEncoder};
 use ort::session::Session;
 use serde::Deserialize;
@@ -149,10 +152,20 @@ impl DecimaModel {
         intra_threads: Option<usize>,
     ) -> Result<Self, Error> {
         let config: DecisionConfig = read_json(&files.decision)?;
-        if config.engine != "onnx" || config.layout != LAYOUT {
+        if config.engine != "onnx" || ![LAYOUT, LAYOUT_FIT].contains(&config.layout.as_str()) {
             return Err(Error::Model(format!(
-                "unsupported engine/layout {}/{}; this engine serves onnx/{LAYOUT}",
+                "unsupported engine/layout {}/{}; this engine serves onnx/{LAYOUT} and onnx/{LAYOUT_FIT}",
                 config.engine, config.layout
+            )));
+        }
+        // option_fit changes the rows, so it comes with its own layout id: an older runtime refuses
+        // the model instead of rendering its options the v1 way.
+        if config.layout != config.decima.layout_id() {
+            return Err(Error::Model(format!(
+                "{}: layout {} with option_fit {}; option_fit models are {LAYOUT_FIT}",
+                files.decision.display(),
+                config.layout,
+                config.decima.option_fit
             )));
         }
         config

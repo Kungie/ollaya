@@ -1,1 +1,2 @@
-"""Decima (amyrmahdy/decima-small): an e5-small encoder with a late-interaction option scorer, `decima-late-interaction-v1`."""
+"""Decima (amyrmahdy/decima-small, -base, -agent): an encoder with a late-interaction option scorer,
+`decima-late-interaction-v1` (and `-v2` for a checkpoint with choice_fit)."""

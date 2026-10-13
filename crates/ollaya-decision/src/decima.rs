@@ -1,14 +1,23 @@
-//! `decima-late-interaction-v1`: Decima (`amyrmahdy/decima-small`), an e5-small encoder with a
-//! late-interaction option scorer. Requests follow the author's `decima/systemone.py` and
-//! `decima/model.py` at v1.1.1 (`ollaya_convert.families.decima.layout`); `docs/families/decima.md`
-//! is the spec.
+//! `decima-late-interaction-v1` and `-v2`: Decima (`amyrmahdy/decima-small`, `-base`, `-agent`), an
+//! encoder with a late-interaction option scorer. Requests follow the author's `decima/systemone.py`,
+//! `decima/model.py` and `decima/render.py` at v2.2.0 (`ollaya_convert.families.decima.layout`);
+//! `docs/families/decima.md` is the spec.
 //!
 //! Every question becomes one state row and one row per option, each encoded on its own:
 //!
 //! ```text
 //! state row   [cls] tok(state_prefix + normalize(text + "\n" + state))[..max_state_tokens - 2] [sep]
-//! option row  [cls] tok(option_prefix + normalize(text + " " + option))[..max_option_tokens - 2] [sep]
+//! option row  [cls] tok(option_text)[..max_option_tokens - 2] [sep]
+//! full        option_prefix + normalize(text + " " + option)
+//! fitted      option_prefix + head + " … " + normalize(option)   (option_prefix + normalize(option)
+//!             when no word fits), head the longest run of normalize(text)'s leading words that fits
 //! ```
+//!
+//! `option_text` is `render.py`'s `choice_texts`. v2 (`option_fit`, the author's `choice_fit`): an
+//! option whose full text fits `max_option_tokens` (or has at most `max_option_tokens - 2`
+//! characters) keeps it, any other is fitted. v1: every option keeps its full text, unless cutting
+//! them makes two of the question's rows identical; then the question's options are rendered as in
+//! v2.
 //!
 //! * `text` is the question's instructions (the question id when they are absent or null; JSON
 //!   other than a string as `json.dumps(ensure_ascii=False)`). A noul question whose criteria give
@@ -27,15 +36,20 @@
 //! answers 422 `STATE_TRUNCATED` as upstream's server does (its `model.py` truncates, as
 //! `/api/decide` does). An option row over `max_option_tokens` is cut silently, as upstream cuts it.
 
+use std::collections::HashSet;
+
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::layout::TokenEncoder;
-use crate::pyrepr::strip;
+use crate::pyrepr::{split, strip};
 use crate::question::{Criteria, QType, Question, Questions};
 use crate::{Error, pyjson};
 
+/// Options keep the right-hand cut unless it collapses two of them (`option_fit` false).
 pub const LAYOUT: &str = "decima-late-interaction-v1";
+/// Options are always kept whole in the option window (`option_fit` true).
+pub const LAYOUT_FIT: &str = "decima-late-interaction-v2";
 
 /// The tokenizer this layout needs: token ids without special tokens, and Unicode NFC (upstream's
 /// `normalize` runs `unicodedata.normalize("NFC", text)` before the tokenizer sees the text).
@@ -81,6 +95,11 @@ pub struct DecimaLayout {
     pub max_state_tokens: usize,
     /// Longest option row in tokens, `[cls]` and `[sep]` included.
     pub max_option_tokens: usize,
+    /// The author's `choice_fit` (`decima.json`): every option is kept whole in its row, and only
+    /// the question's copy beside it is shortened ([`LAYOUT_FIT`]). Without it ([`LAYOUT`]) the
+    /// right-hand cut stays, unless it makes two of a question's option rows identical.
+    #[serde(default)]
+    pub option_fit: bool,
     pub special_tokens: DecimaTokens,
     pub noul: NoulText,
     pub limits: Limits,
@@ -204,6 +223,11 @@ pub fn ordinal_log_probs(scores: &[f32], g: &[f32], gap: &[f32], temperature: f6
 }
 
 impl DecimaLayout {
+    /// The layout id a `decision.json` with this configuration declares.
+    pub fn layout_id(&self) -> &'static str {
+        if self.option_fit { LAYOUT_FIT } else { LAYOUT }
+    }
+
     /// Reject configurations this layout cannot run.
     pub fn validate(&self) -> Result<(), Error> {
         let bad = |msg: String| Err(Error::invalid(msg));
@@ -288,6 +312,22 @@ impl DecimaLayout {
         Ok((body, options))
     }
 
+    /// `[cls] tok(text) [sep]`, cut to `max_len` tokens, and whether it was cut.
+    fn ids(
+        &self,
+        enc: &dyn DecimaEncoder,
+        text: &str,
+        max_len: usize,
+    ) -> Result<(Vec<u32>, bool), Error> {
+        let body = enc.encode(text)?;
+        let keep = body.len().min(max_len - 2);
+        let mut ids = Vec::with_capacity(keep + 2);
+        ids.push(self.special_tokens.cls);
+        ids.extend_from_slice(&body[..keep]);
+        ids.push(self.special_tokens.sep);
+        Ok((ids, keep < body.len()))
+    }
+
     /// `[cls] tok(prefix + normalize(text)) [sep]`, cut to `max_len` tokens, and whether it was cut.
     fn row(
         &self,
@@ -297,13 +337,67 @@ impl DecimaLayout {
         max_len: usize,
     ) -> Result<(Vec<u32>, bool), Error> {
         let normalized = enc.nfc(body);
-        let body = enc.encode(&format!("{prefix}{}", strip(&normalized)))?;
-        let keep = body.len().min(max_len - 2);
-        let mut ids = Vec::with_capacity(keep + 2);
-        ids.push(self.special_tokens.cls);
-        ids.extend_from_slice(&body[..keep]);
-        ids.push(self.special_tokens.sep);
-        Ok((ids, keep < body.len()))
+        self.ids(enc, &format!("{prefix}{}", strip(&normalized)), max_len)
+    }
+
+    /// `len(tok(text)["input_ids"])`: the text's tokens, `[cls]` and `[sep]` included.
+    fn tokens(&self, enc: &dyn DecimaEncoder, text: &str) -> Result<usize, Error> {
+        Ok(enc.encode(text)?.len() + 2)
+    }
+
+    /// `render.choice_texts`: the text of every option row of a question whose text beside the
+    /// options is `question` (empty when the layout keeps the question out of option rows).
+    pub fn option_texts(
+        &self,
+        enc: &dyn DecimaEncoder,
+        question: &str,
+        options: &[String],
+    ) -> Result<Vec<String>, Error> {
+        let prefix = self.option_prefix.as_str();
+        let max_len = self.max_option_tokens;
+        let normalize = |s: &str| strip(&enc.nfc(s)).to_owned();
+        let full: Vec<String> = options
+            .iter()
+            .map(|o| format!("{prefix}{}", normalize(strip(&format!("{question} {o}")))))
+            .collect();
+        if !self.option_fit {
+            let mut rows = HashSet::with_capacity(full.len());
+            for text in &full {
+                rows.insert(self.ids(enc, text, max_len)?.0);
+            }
+            if rows.len() == full.len() {
+                return Ok(full);
+            }
+        }
+        let question = normalize(question);
+        let words: Vec<&str> = split(&question).collect();
+        let fitted =
+            |head: usize, option: &str| format!("{prefix}{} … {option}", words[..head].join(" "));
+        let mut out = Vec::with_capacity(options.len());
+        for (option, full) in options.iter().zip(full) {
+            // Upstream's shortcut: a token is at least one character (Python's `len`).
+            if full.chars().count() <= max_len - 2 || self.tokens(enc, &full)? <= max_len {
+                out.push(full);
+                continue;
+            }
+            let option = normalize(option);
+            // Upstream's binary search for the longest question head that fits.
+            let (mut lo, mut hi) = (0, words.len());
+            while lo < hi {
+                let mid = (lo + hi).div_ceil(2); // (lo + hi + 1) // 2
+                if self.tokens(enc, &fitted(mid, &option))? <= max_len {
+                    lo = mid;
+                } else {
+                    hi = mid - 1;
+                }
+            }
+            out.push(if lo > 0 {
+                fitted(lo, &option)
+            } else {
+                format!("{prefix}{option}")
+            });
+        }
+        Ok(out)
     }
 
     /// Every question's rows, in request order.
@@ -336,17 +430,12 @@ impl DecimaLayout {
             } else {
                 ""
             };
-            let option_ids = options
+            let option_ids = self
+                .option_texts(enc, in_options, &options)?
                 .iter()
-                .map(|o| {
-                    let option = format!("{in_options} {o}");
-                    self.row(
-                        enc,
-                        &self.option_prefix,
-                        strip(&option),
-                        self.max_option_tokens,
-                    )
-                    .map(|(ids, _)| ids)
+                .map(|text| {
+                    self.ids(enc, text, self.max_option_tokens)
+                        .map(|(ids, _)| ids)
                 })
                 .collect::<Result<_, _>>()?;
             out.push(DecimaQuestion {
@@ -396,6 +485,21 @@ mod tests {
     impl DecimaEncoder for Chars {
         fn nfc(&self, text: &str) -> String {
             text.replace("e\u{301}", "\u{e9}")
+        }
+    }
+
+    /// One id per UTF-8 byte: a character can take more than one token.
+    struct Bytes;
+
+    impl TokenEncoder for Bytes {
+        fn encode(&self, text: &str) -> Result<Vec<u32>, Error> {
+            Ok(text.bytes().map(u32::from).collect())
+        }
+    }
+
+    impl DecimaEncoder for Bytes {
+        fn nfc(&self, text: &str) -> String {
+            Chars.nfc(text)
         }
     }
 
@@ -514,7 +618,9 @@ mod tests {
             (read(&q.state_ids).as_str(), q.state_truncated),
             ("q: Q\nabc", true)
         );
-        assert_eq!(read(&q.option_ids[0]), "p: Q");
+        // Both options cut to "p: Q" would collapse, so they are fitted: "p: long option", "p: b".
+        assert_eq!(read(&q.option_ids[0]), "p: l");
+        assert_eq!(read(&q.option_ids[1]), "p: b");
         assert_eq!(q.option_ids[0].len(), 6);
         let r = encode(
             &l,
@@ -523,6 +629,104 @@ mod tests {
         )
         .unwrap();
         assert!(!r.questions[0].state_truncated);
+    }
+
+    /// `option_texts` for one question, without (v1) and with (v2) `option_fit`.
+    fn texts(
+        enc: &dyn DecimaEncoder,
+        max_option: usize,
+        question: &str,
+        options: &[&str],
+    ) -> [Vec<String>; 2] {
+        let options: Vec<String> = options.iter().map(|&o| o.to_owned()).collect();
+        let mut l = layout(512, max_option);
+        let v1 = l.option_texts(enc, question, &options).unwrap();
+        l.option_fit = true;
+        let v2 = l.option_texts(enc, question, &options).unwrap();
+        [v1, v2]
+    }
+
+    // The expected texts are upstream's `render.choice_texts` (v2.2.0) with the same toy tokenizers.
+
+    #[test]
+    fn fits_options_like_render_py() {
+        // The right-hand cut would make "yes" and "no" the same row: both layouts fit them, each
+        // with the longest question head that fits beside it.
+        let want = ["p: Is this … yes", "p: Is this ticket … no"];
+        assert_eq!(
+            texts(&Chars, 24, "Is this ticket urgent today?", &["yes", "no"]),
+            [want, want]
+        );
+        // Cut rows that stay apart keep v1's rendering; v2 fits them (no question word fits).
+        let opts = ["alpha: a long description", "beta: a long description"];
+        assert_eq!(
+            texts(&Chars, 24, "Q", &opts),
+            [
+                vec![
+                    "p: Q alpha: a long description",
+                    "p: Q beta: a long description"
+                ],
+                vec![
+                    "p: alpha: a long description",
+                    "p: beta: a long description"
+                ],
+            ]
+        );
+        // Two of three collapse: the whole question is fitted, and an option whose full text
+        // fits keeps it.
+        let opts = [
+            "billing: charges and refunds",
+            "billing: charges and refunds, VAT",
+            "ops",
+        ];
+        let want = [
+            "p: billing: charges and refunds",
+            "p: billing: charges and refunds, VAT",
+            "p: Pick the team for … ops",
+        ];
+        assert_eq!(
+            texts(&Chars, 32, "Pick the team for this ticket now", &opts),
+            [want, want]
+        );
+    }
+
+    #[test]
+    fn fitting_follows_render_py_edges() {
+        // Upstream's shortcut counts characters: 16 characters keep the full text although they
+        // are 25 tokens, and the cut still makes both rows "p: ééééééééé ".
+        let want = [
+            "p: \u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9} yes",
+            "p: \u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9} no",
+        ];
+        assert_eq!(
+            texts(&Bytes, 24, &"\u{e9}".repeat(9), &["yes", "no"]),
+            [want, want]
+        );
+        // No question: the option alone, however long.
+        let opts = [
+            "a long option that does not fit",
+            "b long option that does not fit",
+        ];
+        let want = opts.map(|o| format!("p: {o}"));
+        assert_eq!(texts(&Chars, 12, "", &opts), [want.clone(), want]);
+        // Words are Python's str.split() of the normalized question, joined by one space.
+        let q = " Re\u{301}sume\u{301}\tthe   plan\u{a0}now\u{1f}please ";
+        let want = [
+            "p: R\u{e9}sum\u{e9} the … yes",
+            "p: R\u{e9}sum\u{e9} the … no",
+        ];
+        assert_eq!(texts(&Chars, 24, q, &["yes", "no"]), [want, want]);
+        // No question word fits: the option alone.
+        let want = ["p: long option", "p: b"];
+        assert_eq!(texts(&Chars, 6, "Q", &["long option", "b"]), [want, want]);
+    }
+
+    #[test]
+    fn layout_ids() {
+        let mut l = layout(512, 64);
+        assert_eq!(l.layout_id(), LAYOUT);
+        l.option_fit = true;
+        assert_eq!(l.layout_id(), LAYOUT_FIT);
     }
 
     #[test]

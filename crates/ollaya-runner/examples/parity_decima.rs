@@ -1,4 +1,4 @@
-//! Parity of the `decima-late-interaction-v1` runtime against the goldens of
+//! Parity of the `decima-late-interaction-v1` and `-v2` runtime against the goldens of
 //! `ollaya_convert.families.decima.goldens` (the author's `decima/model.py` and `systemone.py`,
 //! fp32).
 //!

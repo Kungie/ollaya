@@ -48,6 +48,11 @@ pub fn strip(s: &str) -> &str {
     s.trim_matches(is_space)
 }
 
+/// `str.split()` without arguments: the words between runs of `str.isspace()` characters.
+pub fn split(s: &str) -> impl Iterator<Item = &str> {
+    s.split(is_space).filter(|w| !w.is_empty())
+}
+
 fn is_space(c: char) -> bool {
     c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
 }
@@ -204,6 +209,17 @@ mod tests {
         }
         assert_eq!(strip("\u{1c}\u{a0} x y \u{3000}\n"), "x y");
         assert_eq!(strip("\u{200b}x"), "\u{200b}x");
+    }
+
+    #[test]
+    fn split_matches_python() {
+        // CPython 3.12: "\x1fa\tb\xa0c\u200bd  \u3000e\x85f\u2028 ".split()
+        let s = "\u{1f}a\tb\u{a0}c\u{200b}d  \u{3000}e\u{85}f\u{2028} ";
+        assert_eq!(
+            split(s).collect::<Vec<_>>(),
+            ["a", "b", "c\u{200b}d", "e", "f"]
+        );
+        assert_eq!(split(" \n\t ").count(), 0);
     }
 
     #[test]

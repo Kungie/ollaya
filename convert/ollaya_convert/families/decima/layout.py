@@ -1,6 +1,6 @@
-"""`decima-late-interaction-v1`: the request handling of the author's `decima/systemone.py` and `decima/model.py`
-(github.com/amyrmahdy/decima at v1.1.1), written the way the Rust port is (HF `tokenizers` and `decision.json`
-only). `check.py` and `goldens.py` compare it id for id with upstream.
+"""`decima-late-interaction-v1` and `-v2`: the request handling of the author's `decima/systemone.py`, `decima/model.py`
+and `decima/render.py` (github.com/amyrmahdy/decima at v2.2.0), written the way the Rust port is (HF `tokenizers` and
+`decision.json` only). `check.py` and `goldens.py` compare it id for id with upstream.
 
 Per question, in request order:
 
@@ -11,7 +11,14 @@ Per question, in request order:
                score: each level's text; noul: "yes", "no"
     state    = the state as is when it is a string, else json.dumps(ensure_ascii=False)
     rows     = [cls] + tok(state_prefix + normalize(text + "\\n" + state))[:max_state_tokens - 2] + [sep]
-               [cls] + tok(option_prefix + normalize(text + " " + option))[:max_option_tokens - 2] + [sep], per option
+               [cls] + tok(option_text)[:max_option_tokens - 2] + [sep], per option
+
+`option_text` is render.py's `choice_texts`. With `option_fit` (decima.json's choice_fit, layout v2) every option is
+`full = option_prefix + normalize(text + " " + option)` when it fits max_option_tokens (or has at most
+max_option_tokens - 2 characters), else `option_prefix + head + " … " + normalize(option)`, where head is the longest
+run of normalize(text)'s leading whitespace-separated words (found by upstream's binary search) that fits, and
+`option_prefix + normalize(option)` when no word does. Without it (v1) every option is `full`, unless cutting them to
+max_option_tokens makes two rows identical: then that question's options are rendered as with option_fit.
 
 `normalize` is NFC, then Python's str.strip() (upstream's normalize for lang "en", which is all systemone uses);
 the empty instructions leave the state alone. A state row over max_state_tokens is cut and flagged (upstream's
@@ -82,10 +89,41 @@ class DecimaLayout:
             return t, body, list(n["options"])
         raise LayoutError("question %r: unknown type %r" % (qid, t))
 
-    def row(self, prefix, s, max_len):
+    def ids(self, s, max_len):
         """-> (ids, cut): the tokenizer's <s> ... </s> around the text, cut to max_len tokens."""
-        body = self.tok.encode(prefix + normalize(s), add_special_tokens=False).ids
+        body = self.tok.encode(s, add_special_tokens=False).ids
         return [self.cls] + body[:max_len - 2] + [self.sep], len(body) + 2 > max_len
+
+    def row(self, prefix, s, max_len):
+        return self.ids(prefix + normalize(s), max_len)
+
+    def tokens(self, s):
+        """len(tok(s)["input_ids"]): the text's tokens and the two special tokens."""
+        return len(self.tok.encode(s, add_special_tokens=False).ids) + 2
+
+    def option_texts(self, question, options):
+        """render.choice_texts, for lang "en"."""
+        prefix, max_len = self.d["option_prefix"], self.d["max_option_tokens"]
+        full = [prefix + normalize(("%s %s" % (question, o)).strip()) for o in options]
+        if not self.d.get("option_fit", False):
+            if len({tuple(self.ids(t, max_len)[0]) for t in full}) == len(full):
+                return full
+        out = []
+        for o, f in zip(options, full):
+            if len(f) <= max_len - 2 or self.tokens(f) <= max_len:
+                out.append(f)
+                continue
+            opt = normalize(o)
+            words = normalize(question).split()
+            lo, hi = 0, len(words)
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                if self.tokens("%s%s … %s" % (prefix, " ".join(words[:mid]), opt)) <= max_len:
+                    lo = mid
+                else:
+                    hi = mid - 1
+            out.append("%s%s … %s" % (prefix, " ".join(words[:lo]), opt) if lo else prefix + opt)
+        return out
 
     def encode(self, state, questions):
         """-> {"state_tokens", "questions": [{"qid", "type", "state_ids", "option_ids", "state_truncated"}]}."""
@@ -102,8 +140,7 @@ class DecimaLayout:
             in_options = body if self.d["question_in_options"] else ""
             state_ids, cut = self.row(self.d["state_prefix"], "%s\n%s" % (in_state, s) if in_state else s,
                                       self.d["max_state_tokens"])
-            option_ids = [self.row(self.d["option_prefix"], ("%s %s" % (in_options, o)).strip(),
-                                   self.d["max_option_tokens"])[0] for o in options]
+            option_ids = [self.ids(t, self.d["max_option_tokens"])[0] for t in self.option_texts(in_options, options)]
             out.append({"qid": qid, "type": t, "state_ids": state_ids, "option_ids": option_ids,
                         "state_truncated": cut})
         return {"state_tokens": len(self.tok.encode(s, add_special_tokens=False).ids), "questions": out}
